@@ -13,17 +13,17 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# النموذج الرئيسي - سريع وجودة عالية (مش reasoning عشان ميبطأش)
-OPENROUTER_MODEL = "meta-llama/llama-4-scout:free"
+# النموذج الرئيسي - Qwen 3 أقوى نموذج مجاني من Qwen
+OPENROUTER_MODEL = "qwen/qwen3-235b-a22b:free"
 
 # النموذج السريع - للأسئلة البسيطة والتحيات (أسرع نموذج)
-FAST_MODEL = "google/gemma-3-4b-it:free"
+FAST_MODEL = "qwen/qwen3-8b:free"
 
-# النماذج البديلة - مرتبة حسب السرعة والجودة
+# النماذج البديلة - مرتبة حسب الجودة والتوفر
 OPENROUTER_FALLBACK_MODELS = [
-    "qwen/qwen3-8b:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    "qwen/qwen3-235b-a22b:free",
+    "meta-llama/llama-4-scout:free",
+    "google/gemma-3-4b-it:free",
 ]
 
 # News Settings
@@ -228,17 +228,17 @@ ROADMAPS = {
 # إعدادات السرعة - Speed Settings
 # ═══════════════════════════════════════
 
-# مهلة الطلب العادية (ثانية) - تم تقليلها لتسريع الاستجابة
-REQUEST_TIMEOUT = 20  # كان 30، دلوقتي 20
+# مهلة الطلب العادية (ثانية) - وقت كافي لنموذج Qwen الكبير
+REQUEST_TIMEOUT = 30
 
 # مهلة الطلب السريع (ثانية) - للأسئلة البسيطة
-FAST_TIMEOUT = 12
+FAST_TIMEOUT = 15
 
 # عدد محاولات إعادة المحاولة
-MAX_RETRIES = 2  # كان 3، دلوقتي 2
+MAX_RETRIES = 3
 
 # تأخير بين المحاولات (ثانية)
-RETRY_DELAY = 5  # كان 10، دلوقتي 5
+RETRY_DELAY = 3
 
 # ═══════════════════════════════════════
 # إعدادات البوت - Bot Settings
@@ -269,7 +269,12 @@ CREATOR_INFO = {
 }
 
 # Memory / Storage
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# لو Railway Volume متوفر، استخدمه (بيانات دائمة حتى بعد إعادة النشر)
+RAILWAY_VOLUME_PATH = os.environ.get("RAILWAY_VOLUME_PATH", "")
+if RAILWAY_VOLUME_PATH and os.path.isdir(RAILWAY_VOLUME_PATH):
+    DATA_DIR = RAILWAY_VOLUME_PATH
+else:
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 DATABASE_PATH = os.path.join(DATA_DIR, "memory.db")
 LOG_FILE = os.path.join(DATA_DIR, "bot.log")

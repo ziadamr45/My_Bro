@@ -165,8 +165,12 @@ def _call_ai_sync(
                 if "choices" in data and len(data["choices"]) > 0:
                     content = data["choices"][0].get("message", {}).get("content", "")
                     if content:
-                        logger.info(f"AI response from {model} (attempt {attempt+1}, {len(content)} chars)")
-                        return content
+                        # شيل thinking/reasoning tags من نماذج Qwen3
+                        content = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', content, flags=re.DOTALL)
+                        content = content.strip()
+                        if content:
+                            logger.info(f"AI response from {model} (attempt {attempt+1}, {len(content)} chars)")
+                            return content
 
                 if "error" in data:
                     error_msg = data.get("error", {})
