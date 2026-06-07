@@ -1,10 +1,11 @@
 """
 جلب الأخبار - News Fetcher Module
 يقوم بجلب الأخبار من مصادر RSS المتعددة
-يتم فلترة الأخبار حسب التاريخ أثناء الجلب لتوفير الوقت وال带宽
++ دعم المكالمات غير المتزامنة
 """
 
 import re
+import asyncio
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime, timezone
@@ -19,26 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 def _is_recent(published: datetime = None) -> bool:
-    """
-    التحقق من أن الخبر ضمن الإطار الزمني المحدد
-    """
     if published is None:
-        return True  # لو مفيش تاريخ، نسيبه يعدي (هيتفلتر بعدين)
-
+        return True
     now = datetime.now(timezone.utc)
-
-    # Handle timezone-naive datetimes
     if published.tzinfo is None:
         published = published.replace(tzinfo=timezone.utc)
-
     time_diff = now - published
     return time_diff.total_seconds() <= NEWS_FETCH_HOURS * 3600
 
 
 def _parse_published(entry) -> Optional[datetime]:
-    """
-    استخراج تاريخ النشر من المدخل
-    """
     if hasattr(entry, "published_parsed") and entry.published_parsed:
         try:
             return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
@@ -52,26 +43,46 @@ def _parse_published(entry) -> Optional[datetime]:
     return None
 
 
-def fetch_rss_feed(feed_url: str) -> List[Dict]:
-    """
-    جلب الأخبار من مصدر RSS واحد
-    يتم فلترة الأخبار حسب التاريخ أثناء الجلب لتوفير الوقت
-    """
+def parse_entry(entry, feed_url: str, published: datetime = None) -> Optional[Dict]:
+    article = {
+        "title": getattr(entry, "title", "").strip(),
+        "link": getattr(entry, "link", "").strip(),
+        "description": "",
+        "published": published,
+        "source": "",
+        "source_url": feed_url,
+    }
+
+    if hasattr(entry, "summary"):
+        article["description"] = re.sub(r'<[^>]+>', '', entry.summary).strip()
+    elif hasattr(entry, "description"):
+        article["description"] = re.sub(r'<[^>]+>', '', entry.description).strip()
+
+    if hasattr(entry, "source") and hasattr(entry.source, "title"):
+        article["source"] = entry.source.title
+    else:
+        try:
+            domain = urlparse(feed_url).netloc
+            article["source"] = domain.replace("www.", "")
+        except Exception:
+            article["source"] = "Unknown"
+
+    return article
+
+
+def _fetch_rss_feed_sync(feed_url: str) -> List[Dict]:
+    """جلب الأخبار من مصدر RSS واحد (متزامن)"""
     articles = []
 
     try:
         logger.info(f"Fetching RSS feed: {feed_url}")
-
         response = requests.get(
             feed_url,
             timeout=REQUEST_TIMEOUT,
-            headers={
-                "User-Agent": "AI-News-Bot/1.0 (Telegram Bot)"
-            }
+            headers={"User-Agent": "AI-News-Bot/1.0 (Telegram Bot)"}
         )
         response.raise_for_status()
 
-        # تحليل الـ RSS
         feed = feedparser.parse(response.content)
 
         if feed.bozo and not feed.entries:
@@ -83,10 +94,7 @@ def fetch_rss_feed(feed_url: str) -> List[Dict]:
 
         for entry in feed.entries:
             try:
-                # استخراج تاريخ النشر الأول
                 published = _parse_published(entry)
-
-                # فلترة حسب التاريخ أثناء الجلب - تخطي الأخبار القديمة
                 if published and not _is_recent(published):
                     skipped_old += 1
                     continue
@@ -111,51 +119,28 @@ def fetch_rss_feed(feed_url: str) -> List[Dict]:
     return articles
 
 
-def parse_entry(entry, feed_url: str, published: datetime = None) -> Optional[Dict]:
-    """
-    تحليل مدخل RSS واستخراج البيانات
-    """
-    article = {
-        "title": getattr(entry, "title", "").strip(),
-        "link": getattr(entry, "link", "").strip(),
-        "description": "",
-        "published": published,
-        "source": "",
-        "source_url": feed_url,
-    }
-
-    # استخراج الوصف
-    if hasattr(entry, "summary"):
-        article["description"] = re.sub(r'<[^>]+>', '', entry.summary).strip()
-    elif hasattr(entry, "description"):
-        article["description"] = re.sub(r'<[^>]+>', '', entry.description).strip()
-
-    # استخراج اسم المصدر
-    if hasattr(entry, "source") and hasattr(entry.source, "title"):
-        article["source"] = entry.source.title
-    else:
-        try:
-            domain = urlparse(feed_url).netloc
-            article["source"] = domain.replace("www.", "")
-        except Exception:
-            article["source"] = "Unknown"
-
-    return article
+async def fetch_rss_feed(feed_url: str) -> List[Dict]:
+    """جلب الأخبار من مصدر RSS واحد (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: _fetch_rss_feed_sync(feed_url))
 
 
-def fetch_all_feeds() -> List[Dict]:
-    """
-    جلب الأخبار من جميع مصادر RSS
-    """
+async def fetch_all_feeds() -> List[Dict]:
+    """جلب الأخبار من جميع مصادر RSS (بالتوازي)"""
+    # جلب كل المصادر بالتوازي عشان أسرع
+    tasks = [fetch_rss_feed(feed_url) for feed_url in RSS_FEEDS]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
     all_articles = []
-
-    for feed_url in RSS_FEEDS:
-        articles = fetch_rss_feed(feed_url)
-        all_articles.extend(articles)
+    for result in results:
+        if isinstance(result, list):
+            all_articles.extend(result)
+        else:
+            logger.error(f"Error fetching feed: {result}")
 
     logger.info(f"Total recent articles fetched from all feeds: {len(all_articles)}")
 
-    # إزالة المكررات بناءً على الرابط
+    # إزالة المكررات
     seen_links = set()
     unique_articles = []
     for article in all_articles:
@@ -170,11 +155,35 @@ def fetch_all_feeds() -> List[Dict]:
     return unique_articles
 
 
-def fetch_news() -> List[Dict]:
-    """
-    الوظيفة الرئيسية لجلب الأخبار
-    """
+async def fetch_news() -> List[Dict]:
+    """الوظيفة الرئيسية لجلب الأخبار (غير متزامن)"""
     logger.info("Starting news fetch process...")
-    articles = fetch_all_feeds()
+    articles = await fetch_all_feeds()
     logger.info(f"News fetch complete. Total: {len(articles)} recent articles")
     return articles
+
+
+# Keep sync version for backward compatibility (main.py uses it)
+def fetch_news_sync() -> List[Dict]:
+    """الوظيفة الرئيسية لجلب الأخبار (متزامن - للتوافق)"""
+    logger.info("Starting news fetch process (sync)...")
+    all_articles = []
+
+    for feed_url in RSS_FEEDS:
+        articles = _fetch_rss_feed_sync(feed_url)
+        all_articles.extend(articles)
+
+    logger.info(f"Total recent articles fetched from all feeds: {len(all_articles)}")
+
+    seen_links = set()
+    unique_articles = []
+    for article in all_articles:
+        link = article.get("link", "")
+        if link and link not in seen_links:
+            seen_links.add(link)
+            unique_articles.append(article)
+        elif not link:
+            unique_articles.append(article)
+
+    logger.info(f"After deduplication: {len(unique_articles)} unique articles")
+    return unique_articles

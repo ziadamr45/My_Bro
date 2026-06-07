@@ -1,6 +1,7 @@
 """
 My Bro - مساعد الذكاء الاصطناعي الشخصي
 بوت تيليجرام كامل مع أوامر + محادثة ذكية + بحث ويب + أزرار تفاعلية
++ تجربة متميزة مع مؤشرات الكتابة + نظام تقدم مباشر + جدولة الأخبار
 """
 
 import logging
@@ -14,6 +15,9 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import pytz
 
 from config import BOT_TOKEN, BOT_NAME, BOT_VERSION, COMPANY_DATA, DAILY_NEWS_HOUR, DAILY_NEWS_MINUTE, DAILY_NEWS_TIMEZONE, BROADCAST_DELAY_SECONDS
 from ai_engine import smart_chat, ask_question, explain_topic, generate_roadmap, generate_company_report
@@ -36,6 +40,11 @@ from news_fetcher import fetch_news
 from filters import filter_news, is_ai_related
 from scorer import rank_articles
 from summarizer import summarize_articles
+from progress import (
+    ProgressManager, TypingIndicator, send_typing,
+    NEWS_STAGES, AI_STAGES, SEARCH_STAGES, COMPANY_STAGES,
+    LEARN_STAGES, ROADMAP_STAGES
+)
 
 # إعداد الـ Logging
 logging.basicConfig(
@@ -56,7 +65,6 @@ user_states = {}
 # ═══════════════════════════════════════
 
 def get_main_keyboard(language: str = "ar") -> ReplyKeyboardMarkup:
-    """لوحة المفاتيح الرئيسية اللي بتظهر أسفل الشات"""
     if language == "ar":
         keyboard = [
             ["📰 الأخبار", "🤖 اسأل My Bro"],
@@ -75,7 +83,6 @@ def get_main_keyboard(language: str = "ar") -> ReplyKeyboardMarkup:
 
 
 def get_news_inline_buttons(language: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار تظهر بعد الأخبار"""
     if language == "ar":
         keyboard = [
             [
@@ -102,7 +109,6 @@ def get_news_inline_buttons(language: str = "ar") -> InlineKeyboardMarkup:
 
 
 def get_learn_inline_buttons(language: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار تظهر بعد المحتوى التعليمي"""
     if language == "ar":
         keyboard = [
             [
@@ -127,7 +133,6 @@ def get_learn_inline_buttons(language: str = "ar") -> InlineKeyboardMarkup:
 
 
 def get_settings_keyboard(language: str = "ar", user_subscribed: bool = False) -> InlineKeyboardMarkup:
-    """أزرار لوحة الإعدادات"""
     if language == "ar":
         sub_btn_text = "❌ إلغاء الاشتراك" if user_subscribed else "📬 اشترك في الأخبار"
         sub_btn_data = "settings_unsubscribe" if user_subscribed else "settings_subscribe"
@@ -164,7 +169,6 @@ def get_settings_keyboard(language: str = "ar", user_subscribed: bool = False) -
 
 
 def get_subscribe_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار الاشتراك"""
     if language == "ar":
         keyboard = [
             [
@@ -183,7 +187,6 @@ def get_subscribe_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
 
 
 def get_language_keyboard() -> InlineKeyboardMarkup:
-    """أزرار اختيار اللغة"""
     keyboard = [
         [
             InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
@@ -194,77 +197,35 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_companies_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار اختيار الشركة"""
     if language == "ar":
         keyboard = [
-            [
-                InlineKeyboardButton("🏢 OpenAI", callback_data="company_openai"),
-                InlineKeyboardButton("🏢 Google", callback_data="company_google"),
-            ],
-            [
-                InlineKeyboardButton("🏢 Anthropic", callback_data="company_anthropic"),
-                InlineKeyboardButton("🏢 Microsoft", callback_data="company_microsoft"),
-            ],
-            [
-                InlineKeyboardButton("🏢 Meta", callback_data="company_meta"),
-                InlineKeyboardButton("🏢 xAI", callback_data="company_xai"),
-            ],
-            [
-                InlineKeyboardButton("🏢 NVIDIA", callback_data="company_nvidia"),
-                InlineKeyboardButton("🏢 DeepMind", callback_data="company_deepmind"),
-            ],
+            [InlineKeyboardButton("🏢 OpenAI", callback_data="company_openai"), InlineKeyboardButton("🏢 Google", callback_data="company_google")],
+            [InlineKeyboardButton("🏢 Anthropic", callback_data="company_anthropic"), InlineKeyboardButton("🏢 Microsoft", callback_data="company_microsoft")],
+            [InlineKeyboardButton("🏢 Meta", callback_data="company_meta"), InlineKeyboardButton("🏢 xAI", callback_data="company_xai")],
+            [InlineKeyboardButton("🏢 NVIDIA", callback_data="company_nvidia"), InlineKeyboardButton("🏢 DeepMind", callback_data="company_deepmind")],
         ]
     else:
         keyboard = [
-            [
-                InlineKeyboardButton("🏢 OpenAI", callback_data="company_openai"),
-                InlineKeyboardButton("🏢 Google", callback_data="company_google"),
-            ],
-            [
-                InlineKeyboardButton("🏢 Anthropic", callback_data="company_anthropic"),
-                InlineKeyboardButton("🏢 Microsoft", callback_data="company_microsoft"),
-            ],
-            [
-                InlineKeyboardButton("🏢 Meta", callback_data="company_meta"),
-                InlineKeyboardButton("🏢 xAI", callback_data="company_xai"),
-            ],
-            [
-                InlineKeyboardButton("🏢 NVIDIA", callback_data="company_nvidia"),
-                InlineKeyboardButton("🏢 DeepMind", callback_data="company_deepmind"),
-            ],
+            [InlineKeyboardButton("🏢 OpenAI", callback_data="company_openai"), InlineKeyboardButton("🏢 Google", callback_data="company_google")],
+            [InlineKeyboardButton("🏢 Anthropic", callback_data="company_anthropic"), InlineKeyboardButton("🏢 Microsoft", callback_data="company_microsoft")],
+            [InlineKeyboardButton("🏢 Meta", callback_data="company_meta"), InlineKeyboardButton("🏢 xAI", callback_data="company_xai")],
+            [InlineKeyboardButton("🏢 NVIDIA", callback_data="company_nvidia"), InlineKeyboardButton("🏢 DeepMind", callback_data="company_deepmind")],
         ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def get_roadmap_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار اختيار خارطة الطريق"""
     if language == "ar":
         keyboard = [
-            [
-                InlineKeyboardButton("🤖 AI", callback_data="roadmap_ai"),
-                InlineKeyboardButton("🧠 ML", callback_data="roadmap_machine learning"),
-            ],
-            [
-                InlineKeyboardButton("🔬 Deep Learning", callback_data="roadmap_deep learning"),
-                InlineKeyboardButton("💬 NLP", callback_data="roadmap_nlp"),
-            ],
-            [
-                InlineKeyboardButton("📝 LLM", callback_data="roadmap_llm"),
-            ],
+            [InlineKeyboardButton("🤖 AI", callback_data="roadmap_ai"), InlineKeyboardButton("🧠 ML", callback_data="roadmap_machine learning")],
+            [InlineKeyboardButton("🔬 Deep Learning", callback_data="roadmap_deep learning"), InlineKeyboardButton("💬 NLP", callback_data="roadmap_nlp")],
+            [InlineKeyboardButton("📝 LLM", callback_data="roadmap_llm")],
         ]
     else:
         keyboard = [
-            [
-                InlineKeyboardButton("🤖 AI", callback_data="roadmap_ai"),
-                InlineKeyboardButton("🧠 ML", callback_data="roadmap_machine learning"),
-            ],
-            [
-                InlineKeyboardButton("🔬 Deep Learning", callback_data="roadmap_deep learning"),
-                InlineKeyboardButton("💬 NLP", callback_data="roadmap_nlp"),
-            ],
-            [
-                InlineKeyboardButton("📝 LLM", callback_data="roadmap_llm"),
-            ],
+            [InlineKeyboardButton("🤖 AI", callback_data="roadmap_ai"), InlineKeyboardButton("🧠 ML", callback_data="roadmap_machine learning")],
+            [InlineKeyboardButton("🔬 Deep Learning", callback_data="roadmap_deep learning"), InlineKeyboardButton("💬 NLP", callback_data="roadmap_nlp")],
+            [InlineKeyboardButton("📝 LLM", callback_data="roadmap_llm")],
         ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -280,7 +241,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    # حفظ اسم المستخدم
     from memory import update_user
     update_user(user_id, {"name": user_name})
 
@@ -293,10 +253,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard
     )
 
-    # لو المستخدم مش مشترك، اسأله يشترك
     if not is_subscribed(user_id):
-        import asyncio
-        await asyncio.sleep(1.5)  # انتظر شوية عشان الرسالة الترحيبية تظهر الأول
+        await asyncio.sleep(1.5)
         sub_keyboard = get_subscribe_keyboard(lang)
         await update.message.reply_text(
             subscription_prompt(lang),
@@ -319,32 +277,42 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /news - أخبار AI اليوم"""
+    """أمر /news - أخبار AI اليوم مع نظام تقدم متميز"""
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = NEWS_STAGES(lang)
+    title = "جلب أخبار AI" if lang == "ar" else "Fetching AI News"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        articles = fetch_news()
+        # المرحلة 1: جلب الأخبار
+        await progress.update_stage(0)
+        articles = await fetch_news()
         if not articles:
-            await loading_msg.edit_text(
-                "لا توجد أخبار AI جديدة حالياً. 🤖" if lang == "ar" else "No new AI news right now. 🤖"
-            )
+            await progress.error("لا توجد أخبار AI جديدة حالياً. 🤖" if lang == "ar" else "No new AI news right now. 🤖")
             return
 
+        # المرحلة 2: فلترة
+        await progress.update_stage(1)
         filtered = filter_news(articles)
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد أخبار AI مرتبطة اليوم. 🤖" if lang == "ar" else "No AI-related news today. 🤖"
-            )
+            await progress.error("لا توجد أخبار AI مرتبطة اليوم. 🤖" if lang == "ar" else "No AI-related news today. 🤖")
             return
 
+        # المرحلة 3: ترتيب
+        await progress.update_stage(2)
         ranked = rank_articles(filtered)
-        summarized = summarize_articles(ranked)
 
-        # تنسيق الرسالة
+        # المرحلة 4: تلخيص
+        await progress.update_stage(3)
+        summarized = await summarize_articles(ranked)
+
+        # المرحلة 5: تنسيق
+        await progress.update_stage(4)
+
         now = datetime.now(timezone(timedelta(hours=2)))
         days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
         months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
@@ -373,11 +341,12 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         inline_keyboard = get_news_inline_buttons(lang)
 
-        # تقسيم لو الرسالة طويلة
+        # إرسال النتيجة النهائية
         if len(message) > 4000:
             chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+            await progress.complete(delete_progress=True)
             for i, chunk in enumerate(chunks):
-                if i == len(chunks) - 1:  # آخر جزء مع الأزرار
+                if i == len(chunks) - 1:
                     await update.message.reply_text(
                         chunk, parse_mode="HTML",
                         disable_web_page_preview=True,
@@ -385,17 +354,16 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 else:
                     await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
-            await loading_msg.delete()
         else:
-            await loading_msg.edit_text(
-                message, parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_markup=inline_keyboard
+            await progress.complete(
+                final_message=message,
+                reply_markup=inline_keyboard,
+                delete_progress=False
             )
 
     except Exception as e:
         logger.error(f"Error in /news: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ أثناء جلب الأخبار" if lang == "ar" else "Error fetching news"))
+        await progress.error("حدث خطأ أثناء جلب الأخبار" if lang == "ar" else "Error fetching news")
 
 
 async def breaking_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -404,28 +372,31 @@ async def breaking_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = NEWS_STAGES(lang)
+    title = "خبر عاجل" if lang == "ar" else "Breaking News"
+    progress = ProgressManager(update, context, stages[:3], lang, title)
+    await progress.start()
 
     try:
-        articles = fetch_news()
+        await progress.update_stage(0)
+        articles = await fetch_news()
+
+        await progress.update_stage(1)
         filtered = filter_news(articles)
 
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد أخبار عاجلة حالياً. 🤖" if lang == "ar" else "No breaking news right now. 🤖"
-            )
+            await progress.error("لا توجد أخبار عاجلة حالياً. 🤖" if lang == "ar" else "No breaking news right now. 🤖")
             return
 
+        await progress.update_stage(2)
         ranked = rank_articles(filtered)
         top = ranked[0] if ranked else None
 
         if not top:
-            await loading_msg.edit_text(
-                "لا توجد أخبار عاجلة حالياً. 🤖" if lang == "ar" else "No breaking news right now. 🤖"
-            )
+            await progress.error("لا توجد أخبار عاجلة حالياً. 🤖" if lang == "ar" else "No breaking news right now. 🤖")
             return
 
-        summarized = summarize_articles([top])
+        summarized = await summarize_articles([top])
 
         if lang == "ar":
             message = f"""🔴 <b>خبر عاجل</b>
@@ -445,11 +416,11 @@ async def breaking_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤖 <i>My Bro — Breaking Alert</i>"""
 
         inline_keyboard = get_news_inline_buttons(lang)
-        await loading_msg.edit_text(message, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
+        await progress.complete(final_message=message, reply_markup=inline_keyboard, delete_progress=False)
 
     except Exception as e:
         logger.error(f"Error in /breaking: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -458,27 +429,35 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = NEWS_STAGES(lang)
+    title = "ملخص أسبوعي" if lang == "ar" else "Weekly Summary"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
         from config import NEWS_FETCH_HOURS
         import config
         original_hours = config.NEWS_FETCH_HOURS
-        config.NEWS_FETCH_HOURS = 168  # أسبوع
+        config.NEWS_FETCH_HOURS = 168
 
-        articles = fetch_news()
-        config.NEWS_FETCH_HOURS = original_hours  # إرجاع
+        await progress.update_stage(0)
+        articles = await fetch_news()
+        config.NEWS_FETCH_HOURS = original_hours
 
+        await progress.update_stage(1)
         filtered = filter_news(articles)
 
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد أخبار AI هذا الأسبوع. 🤖" if lang == "ar" else "No AI news this week. 🤖"
-            )
+            await progress.error("لا توجد أخبار AI هذا الأسبوع. 🤖" if lang == "ar" else "No AI news this week. 🤖")
             return
 
+        await progress.update_stage(2)
         ranked = rank_articles(filtered)
-        summarized = summarize_articles(ranked)
+
+        await progress.update_stage(3)
+        summarized = await summarize_articles(ranked)
+
+        await progress.update_stage(4)
 
         if lang == "ar":
             header = "📊 <b>ملخص أخبار AI الأسبوعي</b>\n━━━━━━━━━━━━━━━━━\n\n"
@@ -501,18 +480,18 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(message) > 4000:
             chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+            await progress.complete(delete_progress=True)
             for i, chunk in enumerate(chunks):
                 if i == len(chunks) - 1:
                     await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
                 else:
                     await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
-            await loading_msg.delete()
         else:
-            await loading_msg.edit_text(message, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
+            await progress.complete(final_message=message, reply_markup=inline_keyboard, delete_progress=False)
 
     except Exception as e:
         logger.error(f"Error in /weekly: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -521,17 +500,23 @@ async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = NEWS_STAGES(lang)
+    title = "جلب الترندات" if lang == "ar" else "Fetching Trending"
+    progress = ProgressManager(update, context, stages[:3], lang, title)
+    await progress.start()
 
     try:
-        articles = fetch_news()
+        await progress.update_stage(0)
+        articles = await fetch_news()
+
+        await progress.update_stage(1)
         filtered = filter_news(articles)
 
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖"
-            )
+            await progress.error("لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖")
             return
+
+        await progress.update_stage(2)
 
         from collections import Counter
         from config import AI_KEYWORDS
@@ -549,9 +534,7 @@ async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         top_trends = keyword_counter.most_common(10)
 
         if not top_trends:
-            await loading_msg.edit_text(
-                "لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖"
-            )
+            await progress.error("لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖")
             return
 
         if lang == "ar":
@@ -568,11 +551,11 @@ async def trending_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += "\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — تتبع الترندات</i>"
 
         inline_keyboard = get_news_inline_buttons(lang)
-        await loading_msg.edit_text(message, parse_mode="HTML", reply_markup=inline_keyboard)
+        await progress.complete(final_message=message, reply_markup=inline_keyboard, delete_progress=False)
 
     except Exception as e:
         logger.error(f"Error in /trending: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -591,22 +574,28 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML")
         return
 
-    loading_msg = await update.message.reply_text(
-        "🔍 جاري البحث..." if lang == "ar" else "🔍 Searching..."
-    )
+    stages = SEARCH_STAGES(lang)
+    title = f"بحث: {query}" if lang == "ar" else f"Searching: {query}"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        articles = fetch_news()
+        # المرحلة 1: البحث
+        await progress.update_stage(0)
+        articles = await fetch_news()
         query_lower = query.lower()
         rss_results = []
         for article in articles:
-            title = article.get("title", "").lower()
+            title_text = article.get("title", "").lower()
             desc = article.get("description", "").lower()
-            if query_lower in title or query_lower in desc:
+            if query_lower in title_text or query_lower in desc:
                 rss_results.append(article)
 
         from web_search import search_web
-        web_results = search_web(query, max_results=5)
+        web_results = await search_web(query, max_results=5)
+
+        # المرحلة 2: تحليل
+        await progress.update_stage(1)
 
         message = ""
 
@@ -616,7 +605,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 message += f"📰 <b>RSS News about: {query}</b>\n━━━━━━━━━━━━━━━━━\n\n"
 
-            summarized_rss = summarize_articles(rss_results[:5])
+            summarized_rss = await summarize_articles(rss_results[:5])
             for i, article in enumerate(summarized_rss):
                 message += format_news_item(
                     i + 1, article['title'],
@@ -633,36 +622,36 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message += f"🌐 <b>Web Search: {query}</b>\n━━━━━━━━━━━━━━━━━\n\n"
 
             for i, r in enumerate(web_results[:5], 1):
-                title = r.get("title", "")
+                title_text = r.get("title", "")
                 snippet = r.get("snippet", "")
                 link = r.get("link", "")
-                message += f"{i}. 📄 <b>{title}</b>\n"
+                message += f"{i}. 📄 <b>{title_text}</b>\n"
                 if snippet:
                     message += f"   {snippet[:200]}\n"
                 if link:
                     message += f'   🔗 <a href="{link}">اقرأ المزيد</a>\n' if lang == "ar" else f'   🔗 <a href="{link}">Read more</a>\n'
                 message += "\n"
 
+        # المرحلة 3: تجهيز الرد
+        await progress.update_stage(2)
+
         if not rss_results and not web_results:
-            if lang == "ar":
-                ai_response = smart_chat(f"ابحث عن معلومات عن: {query}", lang)
-            else:
-                ai_response = smart_chat(f"Search for information about: {query}", lang)
+            ai_response = await smart_chat(f"ابحث عن معلومات عن: {query}" if lang == "ar" else f"Search for information about: {query}", lang)
             message = ai_response
         else:
             message += "━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — بحث متقدم</i>"
 
         if len(message) > 4000:
             chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+            await progress.complete(delete_progress=True)
             for chunk in chunks:
                 await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
-            await loading_msg.delete()
         else:
-            await loading_msg.edit_text(message, parse_mode="HTML", disable_web_page_preview=True)
+            await progress.complete(final_message=message, delete_progress=False)
 
     except Exception as e:
         logger.error(f"Error in /search: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ في البحث" if lang == "ar" else "Search error"))
+        await progress.error("حدث خطأ في البحث" if lang == "ar" else "Search error")
 
 
 async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -683,14 +672,21 @@ async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = COMPANY_STAGES(lang)
+    title = f"تقرير: {company_name}" if lang == "ar" else f"Report: {company_name}"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        report = generate_company_report(company_name, lang)
-        await loading_msg.edit_text(report, parse_mode="HTML")
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        await progress.update_stage(2)
+        report = await generate_company_report(company_name, lang)
+        await progress.update_stage(3)
+        await progress.complete(final_message=report, delete_progress=False)
     except Exception as e:
         logger.error(f"Error in /company: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -709,14 +705,20 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML")
         return
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = AI_STAGES(lang)
+    title = "التفكير" if lang == "ar" else "Thinking"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        response = ask_question(question, lang)
-        await loading_msg.edit_text(response, parse_mode="HTML")
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        response = await ask_question(question, lang)
+        await progress.update_stage(2)
+        await progress.complete(final_message=response, delete_progress=False)
     except Exception as e:
         logger.error(f"Error in /ask: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -737,15 +739,21 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = LEARN_STAGES(lang)
+    title = f"تعلم: {topic}" if lang == "ar" else f"Learning: {topic}"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        explanation = explain_topic(topic, lang)
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        explanation = await explain_topic(topic, lang)
+        await progress.update_stage(2)
         inline_keyboard = get_learn_inline_buttons(lang)
-        await loading_msg.edit_text(explanation, parse_mode="HTML", reply_markup=inline_keyboard)
+        await progress.complete(final_message=explanation, reply_markup=inline_keyboard, delete_progress=False)
     except Exception as e:
         logger.error(f"Error in /learn: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -766,15 +774,21 @@ async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    stages = ROADMAP_STAGES(lang)
+    title = f"خارطة طريق: {topic}" if lang == "ar" else f"Roadmap: {topic}"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        roadmap = generate_roadmap(topic, lang)
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        roadmap = await generate_roadmap(topic, lang)
+        await progress.update_stage(2)
         inline_keyboard = get_learn_inline_buttons(lang)
-        await loading_msg.edit_text(roadmap, parse_mode="HTML", reply_markup=inline_keyboard)
+        await progress.complete(final_message=roadmap, reply_markup=inline_keyboard, delete_progress=False)
     except Exception as e:
         logger.error(f"Error in /roadmap: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 # ═══════════════════════════════════════
@@ -782,7 +796,6 @@ async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════
 
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /language"""
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
@@ -797,7 +810,6 @@ async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def time_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /time"""
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
@@ -806,7 +818,6 @@ async def time_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def sources_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /sources"""
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
@@ -882,7 +893,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"Button callback: user={user_id}, data={data}")
 
-    # ═══ أوامر من الأزرار ═══
     if data == "cmd_start":
         keyboard = get_main_keyboard(lang)
         user_name = query.from_user.first_name or ""
@@ -894,10 +904,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "cmd_news":
-        await _send_news(query, lang)
+        await _send_news_callback(query, context, lang)
 
     elif data == "cmd_trending":
-        await _send_trending(query, lang)
+        await _send_trending_callback(query, context, lang)
 
     elif data == "cmd_ask":
         if lang == "ar":
@@ -925,9 +935,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ═══ تقارير الشركات ═══
     elif data.startswith("company_"):
         company_key = data.replace("company_", "")
-        loading_msg = await query.message.reply_text(format_loading(lang))
+        # إرسال مؤشر الكتابة
+        await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
+
+        stages = COMPANY_STAGES(lang)
+        progress = ProgressManager.__new__(ProgressManager)
+        progress.update = update
+        progress.context = context
+        progress.stages = stages
+        progress.lang = lang
+        progress.title = f"تقرير: {company_key}" if lang == "ar" else f"Report: {company_key}"
+        progress.progress_msg = None
+        progress.typing_task = None
+        progress.start_time = datetime.now().timestamp()
+        progress._current_stage_idx = 0
+
+        # نستخدم رسالة عادية كبداية
+        loading_msg = await query.message.reply_text(
+            f"⏳ {'جاري تجهيز تقرير الشركة...' if lang == 'ar' else 'Preparing company report...'}\n[████████░░] 80%"
+        )
+
         try:
-            report = generate_company_report(company_key, lang)
+            report = await generate_company_report(company_key, lang)
             await loading_msg.edit_text(report, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in company callback: {e}")
@@ -936,9 +965,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ═══ خرائط الطريق ═══
     elif data.startswith("roadmap_"):
         topic = data.replace("roadmap_", "")
-        loading_msg = await query.message.reply_text(format_loading(lang))
+        await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
+
+        loading_msg = await query.message.reply_text(
+            f"⏳ {'جاري تجهيز خارطة الطريق...' if lang == 'ar' else 'Preparing roadmap...'}\n[████████░░] 80%"
+        )
+
         try:
-            roadmap = generate_roadmap(topic, lang)
+            roadmap = await generate_roadmap(topic, lang)
             inline_keyboard = get_learn_inline_buttons(lang)
             await loading_msg.edit_text(roadmap, parse_mode="HTML", reply_markup=inline_keyboard)
         except Exception as e:
@@ -972,7 +1006,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = f"⚙️ <b>Settings</b>\n\n📬 Subscription: {sub_status_en}\n\nChoose what to change:"
         await query.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
 
-    # ═══ الاشتراك في الأخبار ═══
+    # ═══ الاشتراك ═══
     elif data == "settings_subscribe":
         subscribe_user(user_id)
         keyboard = get_main_keyboard(lang)
@@ -990,49 +1024,71 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "skip_subscribe":
         if lang == "ar":
-            await query.message.edit_text("👌 لا مشكلة! ممكن تشترك أي وقت من ⚙️ الإعدادات")
+            msg = "👍 لا مشكلة! ممكن تشترك أي وقت من ⚙️ الإعدادات"
         else:
-            await query.message.edit_text("👌 No problem! You can subscribe anytime from ⚙️ Settings")
+            msg = "👍 No problem! You can subscribe anytime from ⚙️ Settings"
+        await query.message.edit_text(msg)
 
     # ═══ تغيير اللغة ═══
     elif data == "lang_ar":
         set_language(user_id, "ar")
         keyboard = get_main_keyboard("ar")
+        if lang == "ar":
+            msg = "✅ تم تغيير اللغة إلى العربية"
+        else:
+            msg = "✅ Language changed to Arabic"
+        await query.message.edit_text(msg)
         await query.message.reply_text(
-            "✅ تم تغيير اللغة إلى العربية",
+            welcome_message("ar", query.from_user.first_name or ""),
+            parse_mode="HTML",
             reply_markup=keyboard
         )
 
     elif data == "lang_en":
         set_language(user_id, "en")
         keyboard = get_main_keyboard("en")
+        if lang == "ar":
+            msg = "✅ Language changed to English"
+        else:
+            msg = "✅ Language changed to English"
+        await query.message.edit_text(msg)
         await query.message.reply_text(
-            "✅ Language changed to English",
+            welcome_message("en", query.from_user.first_name or ""),
+            parse_mode="HTML",
             reply_markup=keyboard
         )
 
 
-async def _send_news(query, lang: str):
-    """إرسال الأخبار عبر callback (من الأزرار)"""
-    loading_msg = await query.message.reply_text(format_loading(lang))
+async def _send_news_callback(query, context, lang):
+    """إرسال الأخبار من callback"""
+    await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
+
+    loading_msg = await query.message.reply_text(
+        f"⏳ {'جاري جلب الأخبار...' if lang == 'ar' else 'Fetching news...'}\n[██░░░░░░░░] 20%"
+    )
 
     try:
-        articles = fetch_news()
+        articles = await fetch_news()
         if not articles:
-            await loading_msg.edit_text(
-                "لا توجد أخبار AI جديدة حالياً. 🤖" if lang == "ar" else "No new AI news right now. 🤖"
-            )
+            await loading_msg.edit_text("لا توجد أخبار AI جديدة حالياً. 🤖" if lang == "ar" else "No new AI news right now. 🤖")
             return
+
+        await loading_msg.edit_text(
+            f"⏳ {'فلترة وترتيب الأخبار...' if lang == 'ar' else 'Filtering & ranking...'}\n[██████░░░░] 60%"
+        )
 
         filtered = filter_news(articles)
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد أخبار AI مرتبطة اليوم. 🤖" if lang == "ar" else "No AI-related news today. 🤖"
-            )
+            await loading_msg.edit_text("لا توجد أخبار AI مرتبطة اليوم. 🤖" if lang == "ar" else "No AI-related news today. 🤖")
             return
 
         ranked = rank_articles(filtered)
-        summarized = summarize_articles(ranked)
+
+        await loading_msg.edit_text(
+            f"⏳ {'تلخيص الأخبار...' if lang == 'ar' else 'Summarizing news...'}\n[████████░░] 80%"
+        )
+
+        summarized = await summarize_articles(ranked)
 
         now = datetime.now(timezone(timedelta(hours=2)))
         days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
@@ -1048,13 +1104,7 @@ async def _send_news(query, lang: str):
         items = []
         for i, article in enumerate(summarized):
             is_top = article.get("is_top", False)
-            item = format_news_item(
-                i + 1,
-                article.get("title", ""),
-                article.get("arabic_summary", article.get("description", "")[:200]),
-                article.get("link", ""),
-                is_top
-            )
+            item = format_news_item(i + 1, article.get("title", ""), article.get("arabic_summary", article.get("description", "")[:200]), article.get("link", ""), is_top)
             items.append(item)
 
         footer = "\n\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — مساعدك الذكي</i>"
@@ -1064,32 +1114,34 @@ async def _send_news(query, lang: str):
 
         if len(message) > 4000:
             chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+            await loading_msg.delete()
             for i, chunk in enumerate(chunks):
                 if i == len(chunks) - 1:
                     await query.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
                 else:
                     await query.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
-            await loading_msg.delete()
         else:
             await loading_msg.edit_text(message, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
 
     except Exception as e:
-        logger.error(f"Error in _send_news: {e}")
-        await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
+        logger.error(f"Error in _send_news_callback: {e}")
+        await loading_msg.edit_text(format_error("حدث خطأ أثناء جلب الأخبار" if lang == "ar" else "Error fetching news"))
 
 
-async def _send_trending(query, lang: str):
-    """إرسال الترندات عبر callback"""
-    loading_msg = await query.message.reply_text(format_loading(lang))
+async def _send_trending_callback(query, context, lang):
+    """إرسال الترندات من callback"""
+    await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
+
+    loading_msg = await query.message.reply_text(
+        f"⏳ {'جاري جلب الترندات...' if lang == 'ar' else 'Fetching trending...'}\n[████░░░░░░] 40%"
+    )
 
     try:
-        articles = fetch_news()
+        articles = await fetch_news()
         filtered = filter_news(articles)
 
         if not filtered:
-            await loading_msg.edit_text(
-                "لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖"
-            )
+            await loading_msg.edit_text("لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖")
             return
 
         from collections import Counter
@@ -1108,9 +1160,7 @@ async def _send_trending(query, lang: str):
         top_trends = keyword_counter.most_common(10)
 
         if not top_trends:
-            await loading_msg.edit_text(
-                "لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖"
-            )
+            await loading_msg.edit_text("لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖")
             return
 
         if lang == "ar":
@@ -1130,181 +1180,41 @@ async def _send_trending(query, lang: str):
         await loading_msg.edit_text(message, parse_mode="HTML", reply_markup=inline_keyboard)
 
     except Exception as e:
-        logger.error(f"Error in _send_trending: {e}")
+        logger.error(f"Error in _send_trending_callback: {e}")
         await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
 
 
 # ═══════════════════════════════════════
-# المحادثة الذكية (بدون أوامر)
+# المحادثة الحرة - Free Chat
 # ═══════════════════════════════════════
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    معالجة الرسائل العادية
-    + أزرار الكيبورد الرئيسية
-    + محادثة ذكية
-    + بحث ويب تلقائي
-    """
+    """معالجة الرسائل العادية - محادثة حرة مع AI"""
     user_id = update.effective_user.id
-    text = update.message.text.strip()
+    user_text = update.message.text or ""
     lang = get_language(user_id)
 
-    # ═══ معالجة أزرار الكيبورد الرئيسية ═══
-    keyboard_triggers = {
-        # العربية
-        "📰 الأخبار": "news",
-        "🤖 اسأل My Bro": "ask",
-        "📈 التريندات": "trending",
-        "🔍 البحث": "search",
-        "📚 تعلم AI": "learn",
-        "🏢 الشركات": "companies",
-        "⚙️ الإعدادات": "settings",
-        "ℹ️ المساعدة": "help",
-        # الإنجليزية
-        "📰 News": "news",
-        "🤖 Ask My Bro": "ask",
-        "📈 Trending": "trending",
-        "🔍 Search": "search",
-        "📚 Learn AI": "learn",
-        "🏢 Companies": "companies",
-        "⚙️ Settings": "settings",
-        "ℹ️ Help": "help",
+    # تجاهل الرسائل الفارغة
+    if not user_text.strip():
+        return
+
+    increment_chat_count(user_id)
+
+    # التحقق من أزرار لوحة المفاتيح
+    keyboard_commands = {
+        "📰 الأخبار": "/news", "📰 News": "/news",
+        "🤖 اسأل My Bro": "/ask", "🤖 Ask My Bro": "/ask",
+        "📈 التريندات": "/trending", "📈 Trending": "/trending",
+        "🔍 البحث": "/search", "🔍 Search": "/search",
+        "📚 تعلم AI": "/learn", "📚 Learn AI": "/learn",
+        "🏢 الشركات": "/company", "🏢 Companies": "/company",
+        "⚙️ الإعدادات": "settings", "⚙️ Settings": "settings",
+        "ℹ️ المساعدة": "/help", "ℹ️ Help": "/help",
     }
 
-    if text in keyboard_triggers:
-        action = keyboard_triggers[text]
-        increment_command_count(user_id)
-
-        if action == "news":
-            # تنفيذ أمر الأخبار مباشرة
-            loading_msg = await update.message.reply_text(format_loading(lang))
-            try:
-                articles = fetch_news()
-                filtered = filter_news(articles)
-                if not filtered:
-                    await loading_msg.edit_text(
-                        "لا توجد أخبار AI جديدة حالياً. 🤖" if lang == "ar" else "No new AI news right now. 🤖"
-                    )
-                    return
-
-                ranked = rank_articles(filtered)
-                summarized = summarize_articles(ranked)
-
-                now = datetime.now(timezone(timedelta(hours=2)))
-                days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
-                months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
-
-                if lang == "ar":
-                    date_str = f"{days_ar[now.weekday()]}, {now.day} {months_ar[now.month]} {now.year}"
-                    header = f"📰 <b>أخبار الذكاء الاصطناعي اليوم</b>\n📅 {date_str}\n\n━━━━━━━━━━━━━━━━━\n\n"
-                else:
-                    date_str = now.strftime("%A, %B %d, %Y")
-                    header = f"📰 <b>Today's AI News</b>\n📅 {date_str}\n\n━━━━━━━━━━━━━━━━━\n\n"
-
-                items = []
-                for i, article in enumerate(summarized):
-                    is_top = article.get("is_top", False)
-                    item = format_news_item(
-                        i + 1,
-                        article.get("title", ""),
-                        article.get("arabic_summary", article.get("description", "")[:200]),
-                        article.get("link", ""),
-                        is_top
-                    )
-                    items.append(item)
-
-                footer = "\n\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — مساعدك الذكي</i>"
-                message = header + "\n\n".join(items) + footer
-
-                inline_keyboard = get_news_inline_buttons(lang)
-
-                if len(message) > 4000:
-                    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
-                    for i, chunk in enumerate(chunks):
-                        if i == len(chunks) - 1:
-                            await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
-                        else:
-                            await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
-                    await loading_msg.delete()
-                else:
-                    await loading_msg.edit_text(message, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
-            except Exception as e:
-                logger.error(f"Error in keyboard news: {e}")
-                await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
-
-        elif action == "ask":
-            if lang == "ar":
-                msg = "🤖 <b>اسأل My Bro</b>\n\nاكتب سؤالك مباشرة وسأجيبك فوراً!\n\n💡 يمكنك سؤالي عن أي شيء:\n→ ما هو Gemini؟\n→ اشرح AI Agents\n→ ما الفرق بين GPT و Claude؟"
-            else:
-                msg = "🤖 <b>Ask My Bro</b>\n\nType your question and I'll answer right away!\n\n💡 You can ask me anything:\n→ What is Gemini?\n→ Explain AI Agents\n→ What's the difference between GPT and Claude?"
-            await update.message.reply_text(msg, parse_mode="HTML")
-
-        elif action == "trending":
-            loading_msg = await update.message.reply_text(format_loading(lang))
-            try:
-                articles = fetch_news()
-                filtered = filter_news(articles)
-                from collections import Counter
-                from config import AI_KEYWORDS
-
-                keyword_counter = Counter()
-                for article in filtered:
-                    title = article.get("title", "").lower()
-                    desc = article.get("description", "").lower()
-                    text_content = f"{title} {desc}"
-                    for keyword in AI_KEYWORDS:
-                        if len(keyword) > 3 and keyword in text_content:
-                            keyword_counter[keyword] += 1
-
-                top_trends = keyword_counter.most_common(10)
-
-                if not top_trends:
-                    await loading_msg.edit_text("لا توجد ترندات حالياً. 🤖" if lang == "ar" else "No trending topics right now. 🤖")
-                    return
-
-                if lang == "ar":
-                    message = "📈 <b>ترندات الذكاء الاصطناعي</b>\n━━━━━━━━━━━━━━━━━\n\n"
-                else:
-                    message = "📈 <b>AI Trending Topics</b>\n━━━━━━━━━━━━━━━━━\n\n"
-
-                for i, (keyword, count) in enumerate(top_trends, 1):
-                    if lang == "ar":
-                        message += f"{i}. 🔥 <b>{keyword.upper()}</b> — ذُكر {count} مرة\n"
-                    else:
-                        message += f"{i}. 🔥 <b>{keyword.upper()}</b> — mentioned {count} times\n"
-
-                message += "\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — تتبع الترندات</i>"
-
-                inline_keyboard = get_news_inline_buttons(lang)
-                await loading_msg.edit_text(message, parse_mode="HTML", reply_markup=inline_keyboard)
-            except Exception as e:
-                logger.error(f"Error in keyboard trending: {e}")
-                await loading_msg.edit_text(format_error("حدث خطأ" if lang == "ar" else "Error occurred"))
-
-        elif action == "search":
-            if lang == "ar":
-                msg = "🔍 <b>البحث في أخبار AI والويب</b>\n\nاكتب ما تريد البحث عنه مباشرة!\n\n💡 أمثلة:\n→ أحدث أخبار OpenAI\n→ ما هو Sora؟\n→ NVIDIA stock"
-            else:
-                msg = "🔍 <b>Search AI News & Web</b>\n\nType what you want to search for!\n\n💡 Examples:\n→ Latest OpenAI news\n→ What is Sora?\n→ NVIDIA stock"
-            await update.message.reply_text(msg, parse_mode="HTML")
-
-        elif action == "learn":
-            keyboard = get_roadmap_keyboard(lang)
-            if lang == "ar":
-                msg = "📚 <b>تعلم الذكاء الاصطناعي</b>\n\nاختر خارطة طريق من الأزرار بالأسفل\nأو اكتب أي موضوع تريد تعلمه!\n\n💡 أمثلة:\n→ /learn transformers\n→ /learn RAG\n→ /learn AI Agents"
-            else:
-                msg = "📚 <b>Learn AI</b>\n\nChoose a roadmap from buttons below\nOr type any topic you want to learn!\n\n💡 Examples:\n→ /learn transformers\n→ /learn RAG\n→ /learn AI Agents"
-            await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
-
-        elif action == "companies":
-            keyboard = get_companies_keyboard(lang)
-            if lang == "ar":
-                msg = "🏢 <b>تقارير شركات الذكاء الاصطناعي</b>\n\nاختر شركة من الأزرار بالأسفل"
-            else:
-                msg = "🏢 <b>AI Company Reports</b>\n\nChoose a company from buttons below"
-            await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
-
-        elif action == "settings":
+    if user_text in keyboard_commands:
+        cmd = keyboard_commands[user_text]
+        if cmd == "settings":
             user_sub = is_subscribed(user_id)
             keyboard = get_settings_keyboard(lang, user_sub)
             sub_status = "✅ مشترك" if user_sub else "❌ مش مشترك"
@@ -1314,93 +1224,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sub_status_en = "✅ Subscribed" if user_sub else "❌ Not subscribed"
                 msg = f"⚙️ <b>Settings</b>\n\n📬 Subscription: {sub_status_en}\n\nChoose what to change:"
             await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
-
-        elif action == "help":
-            await update.message.reply_text(
-                help_message(lang),
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
-
-        return
-
-    # ═══ التحقق من حالة الإعدادات ═══
-    state = user_states.get(user_id)
-
-    if state == "awaiting_language":
-        if text in ["1", "١", "ar", "عربي", "العربية"]:
-            set_language(user_id, "ar")
-            user_states.pop(user_id, None)
-            keyboard = get_main_keyboard("ar")
-            await update.message.reply_text("✅ تم تغيير اللغة إلى العربية", reply_markup=keyboard)
             return
-        elif text in ["2", "٢", "en", "english", "إنجليزي"]:
-            set_language(user_id, "en")
-            user_states.pop(user_id, None)
-            keyboard = get_main_keyboard("en")
-            await update.message.reply_text("✅ Language changed to English", reply_markup=keyboard)
-            return
-        else:
-            await update.message.reply_text("❌ اختر 1 أو 2 / Choose 1 or 2")
-            return
-
-    elif state == "awaiting_time":
-        time_pattern = r'^[0-2]?[0-9]:[0-5][0-9]$'
-        if re.match(time_pattern, text):
-            set_news_time(user_id, text)
-            user_states.pop(user_id, None)
+        elif cmd == "/ask":
             if lang == "ar":
-                await update.message.reply_text(f"✅ تم تغيير وقت الأخبار إلى {text}")
+                msg = "🤖 اكتب سؤالك وسأجيبك فوراً!"
             else:
-                await update.message.reply_text(f"✅ News time changed to {text}")
+                msg = "🤖 Type your question and I'll answer right away!"
+            await update.message.reply_text(msg)
+            return
+        elif cmd == "/search":
+            if lang == "ar":
+                msg = "🔍 <b>البحث في أخبار AI والويب</b>\n\nاكتب ما تريد البحث عنه!"
+            else:
+                msg = "🔍 <b>Search AI News & Web</b>\n\nType what you want to search for!"
+            await update.message.reply_text(msg, parse_mode="HTML")
+            return
+        elif cmd == "/company":
+            keyboard = get_companies_keyboard(lang)
+            if lang == "ar":
+                msg = "🏢 <b>اختر شركة</b>"
+            else:
+                msg = "🏢 <b>Choose a company</b>"
+            await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
+            return
+        elif cmd == "/learn":
+            keyboard = get_roadmap_keyboard(lang)
+            if lang == "ar":
+                msg = "📚 <b>اختر موضوع للتعلم</b>"
+            else:
+                msg = "📚 <b>Choose a topic to learn</b>"
+            await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
             return
         else:
-            await update.message.reply_text(
-                "❌ صيغة الوقت غير صحيحة. استخدم: <code>09:00</code>" if lang == "ar"
-                else "❌ Invalid time format. Use: <code>09:00</code>",
-                parse_mode="HTML"
-            )
+            # Simulate command
+            context.args = []
+            if cmd == "/news":
+                await news_command(update, context)
+            elif cmd == "/trending":
+                await trending_command(update, context)
+            elif cmd == "/help":
+                await help_command(update, context)
             return
 
-    elif state == "awaiting_sources":
-        try:
-            numbers = [int(n) for n in text.split()]
-            source_map = {
-                1: "openai.com", 2: "blog.google", 3: "techcrunch.com",
-                4: "theverge.com", 5: "arstechnica.com", 6: "venturebeat.com",
-                7: "wired.com"
-            }
-            selected = [source_map[n] for n in numbers if n in source_map]
-            if selected:
-                set_sources(user_id, selected)
-                user_states.pop(user_id, None)
-                if lang == "ar":
-                    await update.message.reply_text("✅ تم تحديث المصادر المفضلة")
-                else:
-                    await update.message.reply_text("✅ Preferred sources updated")
-            else:
-                await update.message.reply_text(
-                    "❌ أرقام غير صحيحة" if lang == "ar" else "❌ Invalid numbers"
-                )
-        except ValueError:
-            await update.message.reply_text(
-                "❌ أرسل أرقام فقط" if lang == "ar" else "❌ Send numbers only"
-            )
-        return
-
-    # ═══ محادثة ذكية عادية (+ بحث ويب تلقائي) ═══
-    increment_chat_count(user_id)
-
-    loading_msg = await update.message.reply_text(format_loading(lang))
+    # محادثة ذكية مع AI
+    stages = AI_STAGES(lang)
+    title = "التفكير" if lang == "ar" else "Thinking"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
 
     try:
-        response = smart_chat(text, lang)
-        await loading_msg.edit_text(response, parse_mode="HTML", disable_web_page_preview=True)
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        response = await smart_chat(user_text, lang)
+        await progress.update_stage(2)
+
+        # لو الرسالة طويلة، نحذف رسالة التقدم ونرسل جديدة
+        if len(response) > 4000:
+            await progress.complete(delete_progress=True)
+            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for chunk in chunks:
+                await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
+        else:
+            await progress.complete(final_message=response, delete_progress=False)
+
     except Exception as e:
-        logger.error(f"Error in smart chat: {e}")
-        await loading_msg.edit_text(
-            format_error("حدث خطأ أثناء المعالجة" if lang == "ar" else "Error processing your message")
-        )
+        logger.error(f"Error in handle_message: {e}")
+        await progress.error("حدث خطأ أثناء المعالجة" if lang == "ar" else "Error processing your message")
 
 
 # ═══════════════════════════════════════
@@ -1410,37 +1299,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
     """
     بث الأخبار اليومية لكل المشتركين
-    بيشتغل تلقائياً كل يوم الساعة 9 الصبح بتوقيت القاهرة
+    يتم استدعاؤها تلقائياً من APScheduler
     """
-    logger.info("📬 Starting daily news broadcast...")
+    logger.info("=" * 50)
+    logger.info("Starting daily news broadcast")
+    logger.info("=" * 50)
 
-    subscribers = get_all_subscribers()
-    if not subscribers:
-        logger.info("📭 No subscribers found. Skipping broadcast.")
-        return
-
-    logger.info(f"📬 Broadcasting to {len(subscribers)} subscribers")
-
-    # جلب وتجهيز الأخبار
     try:
-        articles = fetch_news()
+        # جلب الأخبار
+        articles = await fetch_news()
         if not articles:
-            logger.info("📭 No news found today. Skipping broadcast.")
+            logger.warning("No articles fetched. Skipping broadcast.")
             return
 
+        # فلترة
         filtered = filter_news(articles)
         if not filtered:
-            logger.info("📭 No AI-related news today. Skipping broadcast.")
+            logger.warning("No AI-related articles found. Skipping broadcast.")
             return
 
+        # ترتيب
         ranked = rank_articles(filtered)
-        summarized = summarize_articles(ranked)
 
+        # تلخيص
+        summarized = await summarize_articles(ranked)
+
+        # تجهيز الرسائل
         now = datetime.now(timezone(timedelta(hours=2)))
         days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
         months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
 
-        # تجهيز الرسائل لكل لغة
         messages = {}
         for lang_code in ["ar", "en"]:
             if lang_code == "ar":
@@ -1449,7 +1337,6 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
                 date_str = now.strftime("%A, %B %d, %Y")
 
             header = daily_news_header(lang_code, date_str)
-
             items = []
             for i, article in enumerate(summarized):
                 item = format_news_item(
@@ -1465,7 +1352,15 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
             full_msg = header + "\n\n".join(items) + footer
             messages[lang_code] = full_msg
 
-        # إرسال لكل مشترك
+        # بث لكل المشتركين
+        subscribers = get_all_subscribers()
+
+        if not subscribers:
+            logger.warning("No subscribers found. Skipping broadcast.")
+            return
+
+        logger.info(f"Broadcasting to {len(subscribers)} subscribers")
+
         success_count = 0
         fail_count = 0
 
@@ -1475,7 +1370,6 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
             message = messages.get(lang, messages["ar"])
 
             try:
-                # تقسيم الرسالة لو طويلة
                 if len(message) > 4000:
                     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
                     for chunk in chunks:
@@ -1492,6 +1386,7 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="HTML",
                         disable_web_page_preview=True
                     )
+
                 success_count += 1
                 logger.info(f"✅ News sent to {chat_id}")
 
@@ -1510,15 +1405,20 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"📬 Broadcast complete: {success_count} sent, {fail_count} failed out of {len(subscribers)} subscribers")
 
     except Exception as e:
-        logger.error(f"❌ Error in broadcast: {e}")
+        logger.error(f"❌ Critical error in broadcast: {e}", exc_info=True)
 
+
+# ═══════════════════════════════════════
+# تشغيل البوت - Main
+# ═══════════════════════════════════════
 
 def main():
-    """التشغيل الرئيسي للبوت"""
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set!")
-        sys.exit(1)
+    """تشغيل البوت مع الجدولة"""
+    logger.info("=" * 60)
+    logger.info(f"🤖 {BOT_NAME} v{BOT_VERSION} Starting...")
+    logger.info("=" * 60)
 
+    # بناء التطبيق
     app = Application.builder().token(BOT_TOKEN).build()
 
     # تسجيل الأوامر
@@ -1540,60 +1440,70 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
     app.add_handler(CommandHandler("subscribers", subscribers_command))
 
-    # أزرار تفاعلية
+    # أزرار Inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    # الرسائل العادية (محادثة ذكية)
+    # المحادثة الحرة
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # ═══ إعداد المجدول - Scheduler Setup ═══
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from apscheduler.triggers.cron import CronTrigger
-    import pytz
-
+    # ═══ إعداد الجدولة (APScheduler) ═══
     scheduler = AsyncIOScheduler(timezone=pytz.timezone(DAILY_NEWS_TIMEZONE))
+
+    # بث الأخبار اليومية
     scheduler.add_job(
         broadcast_daily_news,
-        CronTrigger(
-            hour=DAILY_NEWS_HOUR,
-            minute=DAILY_NEWS_MINUTE,
-            timezone=pytz.timezone(DAILY_NEWS_TIMEZONE)
-        ),
-        args=[app],
+        trigger="cron",
+        hour=DAILY_NEWS_HOUR,
+        minute=DAILY_NEWS_MINUTE,
         id="daily_news_broadcast",
         name="Daily AI News Broadcast",
-        replace_existing=True
+        kwargs={"context": None},  # سيتم تحديثه عند التشغيل
     )
-    scheduler.start()
-    logger.info(f"⏰ Scheduler started: Daily news at {DAILY_NEWS_HOUR}:{DAILY_NEWS_MINUTE:02d} {DAILY_NEWS_TIMEZONE}")
 
+    # وظيفة مخصصة لتشغيل الجدولة مع context البوت
+    async def scheduled_broadcast():
+        """بث مجدول مع context البوت"""
+        await broadcast_daily_news(app)
+
+    # تحديث الوظيفة المجدولة
+    scheduler.remove_job("daily_news_broadcast")
+    scheduler.add_job(
+        scheduled_broadcast,
+        trigger="cron",
+        hour=DAILY_NEWS_HOUR,
+        minute=DAILY_NEWS_MINUTE,
+        id="daily_news_broadcast",
+        name="Daily AI News Broadcast",
+    )
+
+    scheduler.start()
+    logger.info(f"📅 Scheduler started - Daily broadcast at {DAILY_NEWS_HOUR}:{DAILY_NEWS_MINUTE:02d} ({DAILY_NEWS_TIMEZONE})")
+
+    # تعيين أوامر البوت في تيليجرام
     async def post_init(application):
-        """تعيين أوامر البوت بعد التهيئة"""
-        from telegram import BotCommand
-        commands = [
-            BotCommand("start", "🚀 ابدأ البوت"),
-            BotCommand("help", "ℹ️ المساعدة"),
-            BotCommand("news", "📰 أخبار AI اليوم"),
-            BotCommand("breaking", "🔴 أهم خبر"),
-            BotCommand("weekly", "📊 ملخص الأسبوع"),
-            BotCommand("trending", "📈 الترندات"),
-            BotCommand("search", "🔍 بحث"),
-            BotCommand("company", "🏢 تقرير شركة"),
-            BotCommand("ask", "🤖 اسأل سؤال"),
-            BotCommand("learn", "📚 تعلم"),
-            BotCommand("roadmap", "🗺️ خارطة طريق"),
-            BotCommand("language", "🌐 تغيير اللغة"),
-            BotCommand("subscribe", "📬 اشترك في الأخبار"),
-            BotCommand("unsubscribe", "❌ إلغاء الاشتراك"),
-            BotCommand("subscribers", "📊 عدد المشتركين"),
-        ]
-        await application.bot.set_my_commands(commands)
-        sub_count = get_subscriber_count()
-        logger.info(f"🤖 My Bro v{BOT_VERSION} started! 📬 {sub_count} subscribers")
+        """بعد تشغيل البوت"""
+        await application.bot.set_my_commands([
+            ("start", "ابدأ / Start"),
+            ("news", "أخبار AI / AI News"),
+            ("breaking", "خبر عاجل / Breaking News"),
+            ("weekly", "ملخص أسبوعي / Weekly Summary"),
+            ("trending", "التريندات / Trending"),
+            ("search", "بحث / Search"),
+            ("ask", "اسأل / Ask"),
+            ("learn", "تعلم / Learn"),
+            ("roadmap", "خارطة طريق / Roadmap"),
+            ("company", "شركة / Company"),
+            ("subscribe", "اشترك / Subscribe"),
+            ("unsubscribe", "إلغاء الاشتراك / Unsubscribe"),
+            ("settings", "إعدادات / Settings"),
+            ("help", "مساعدة / Help"),
+        ])
+        logger.info("✅ Bot commands set")
 
     app.post_init = post_init
 
-    logger.info(f"Starting My Bro v{BOT_VERSION}...")
+    # تشغيل البوت
+    logger.info("🚀 Bot is running! Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
 
 

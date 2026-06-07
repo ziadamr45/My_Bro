@@ -2,8 +2,10 @@
 محرك الذكاء الاصطناعي - AI Engine
 يتعامل مع OpenRouter API لجميع وظائف الذكاء الاصطناعي
 + دعم البحث في الويب + كشف النية تلقائياً
++ دعم المكالمات غير المتزامنة (async) عشان ميتعطلش البوت
 """
 
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -46,17 +48,14 @@ def needs_web_search(text: str) -> bool:
     """
     text_lower = text.lower().strip()
 
-    # فحص المحفزات العربية
     for trigger in WEB_SEARCH_TRIGGERS_AR:
         if trigger in text_lower:
             return True
 
-    # فحص المحفزات الإنجليزية
     for trigger in WEB_SEARCH_TRIGGERS_EN:
         if trigger in text_lower:
             return True
 
-    # أسئلة عن أحداث حالية (أخبار، أسعار، أحدث)
     current_patterns = [
         r'(ايه|اشن|اى|اي)\s*(اخبار|جديد|احدث|آخر)',
         r'(what|how|when|where)\s*(is|are|was|were)\s*(the\s*)?(latest|current|new|recent)',
@@ -67,12 +66,10 @@ def needs_web_search(text: str) -> bool:
         if re.search(pattern, text_lower):
             return True
 
-    # لو المستخدم ذكر URL أو موقع
     url_pattern = r'(https?://|www\.|\.com|\.org|\.net|\.app|\.io|\.dev)'
     if re.search(url_pattern, text_lower):
         return True
 
-    # لو المستخدم سأل عن شركة AI محددة وأخبارها
     company_news_patterns = [
         r'(اخبار|أخبار|news)\s*(openai|google|deepmind|anthropic|meta|xai|nvidia|microsoft)',
         r'(openai|google|deepmind|anthropic|meta|xai|nvidia|microsoft)\s*(اخبار|أخبار|news|جديد|update)',
@@ -87,20 +84,16 @@ def needs_web_search(text: str) -> bool:
 def is_simple_query(text: str) -> bool:
     """
     تحديد هل السؤال بسيط ومش محتاج نموذج كبير
-    (رد سريع، تحية، سؤال بسيط)
     """
     text_lower = text.lower().strip()
 
-    # رسائل قصيرة جداً
     if len(text_lower) < 15:
         return True
 
-    # تحيات
     greetings = ["hi", "hello", "hey", "اهلا", "مرحبا", "هاي", "سلام", "ازيك", "عامل ايه"]
     if any(text_lower.startswith(g) for g in greetings):
         return True
 
-    # شكر
     thanks = ["شكرا", "شكراً", "thanks", "thank you", "thx", "ممتاز", "تمام", "ok"]
     if text_lower in thanks:
         return True
@@ -112,7 +105,7 @@ def is_simple_query(text: str) -> bool:
 # استدعاء AI - AI API Calls
 # ═══════════════════════════════════════
 
-def call_ai(
+def _call_ai_sync(
     prompt: str,
     system_prompt: str = "",
     temperature: float = 0.7,
@@ -121,8 +114,7 @@ def call_ai(
     fast: bool = False,
 ) -> Optional[str]:
     """
-    استدعاء OpenRouter API مع دعم تعدد الموديلات
-    fast=True = يستخدم نموذج سريع صغير
+    استدعاء OpenRouter API (متزامن - يتم تشغيله في thread منفصل)
     """
     if not OPENROUTER_API_KEY:
         logger.error("OPENROUTER_API_KEY not set")
@@ -201,11 +193,38 @@ def call_ai(
     return None
 
 
+async def call_ai(
+    prompt: str,
+    system_prompt: str = "",
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+    prefer_arabic: bool = False,
+    fast: bool = False,
+) -> Optional[str]:
+    """
+    استدعاء OpenRouter API (غير متزامن - لا يحجب event loop)
+    يتم تشغيل الاستدعاء المتزامن في thread منفصل
+    """
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: _call_ai_sync(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            prefer_arabic=prefer_arabic,
+            fast=fast,
+        )
+    )
+    return result
+
+
 # ═══════════════════════════════════════
 # المحادثة الذكية - Smart Chat
 # ═══════════════════════════════════════
 
-def smart_chat(user_message: str, language: str = "ar") -> str:
+async def smart_chat(user_message: str, language: str = "ar") -> str:
     """
     المحادثة الذكية - يفهم القصد تلقائياً ويرد بذكاء
     + يبحث في الويب لو محتاج معلومات حالية
@@ -213,10 +232,10 @@ def smart_chat(user_message: str, language: str = "ar") -> str:
     # 1. كشف هل محتاج بحث في الويب
     if needs_web_search(user_message):
         logger.info(f"Web search needed for: {user_message[:50]}")
-        from web_search import search_and_summarize
-        return search_and_summarize(user_message, language)
+        from web_search import search_and_summarize_async
+        return await search_and_summarize_async(user_message, language)
 
-    # 2. كشف هل سؤال بسيط (يستخدم نموذج سريع)
+    # 2. كشف هل سؤال بسيط
     fast = is_simple_query(user_message)
 
     if language == "ar":
@@ -245,18 +264,17 @@ Rules:
 - Never say "I can't browse websites" - you now have web search capability!"""
 
     max_tokens = 800 if fast else 2048
-    response = call_ai(user_message, system_prompt=system, temperature=0.7, max_tokens=max_tokens, fast=fast)
+    response = await call_ai(user_message, system_prompt=system, temperature=0.7, max_tokens=max_tokens, fast=fast)
     return response or ("عذراً، لم أتمكن من معالجة طلبك. حاول مرة أخرى. 🤖" if language == "ar" else "Sorry, I couldn't process your request. Please try again. 🤖")
 
 
-def ask_question(question: str, language: str = "ar") -> str:
+async def ask_question(question: str, language: str = "ar") -> str:
     """
     /ask - سؤال مباشر مع إجابة مفصلة
     """
-    # كشف هل محتاج بحث ويب
     if needs_web_search(question):
-        from web_search import search_and_summarize
-        return search_and_summarize(question, language)
+        from web_search import search_and_summarize_async
+        return await search_and_summarize_async(question, language)
 
     if language == "ar":
         system = """أنت خبير ذكاء اصطناعي. أجب على الأسئلة بالعربية الفصحى بشكل مفصل ومنظم.
@@ -273,11 +291,11 @@ Use:
 - Key points
 - Links or references if possible"""
 
-    response = call_ai(question, system_prompt=system, temperature=0.5, max_tokens=2048)
+    response = await call_ai(question, system_prompt=system, temperature=0.5, max_tokens=2048)
     return response or ("لم أتمكن من الإجابة. 🤖" if language == "ar" else "I couldn't answer that. 🤖")
 
 
-def explain_topic(topic: str, language: str = "ar") -> str:
+async def explain_topic(topic: str, language: str = "ar") -> str:
     """
     /learn - شرح تعليمي لموضوع
     """
@@ -318,11 +336,11 @@ Format:
 📖 <b>Learning Resources</b>
 → Where to learn more"""
 
-    response = call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
     return response or ("لم أتمكن من شرح الموضوع. 🤖" if language == "ar" else "I couldn't explain this topic. 🤖")
 
 
-def generate_roadmap(topic: str, language: str = "ar") -> str:
+async def generate_roadmap(topic: str, language: str = "ar") -> str:
     """
     /roadmap - خارطة طريق تعليمية
     """
@@ -400,11 +418,11 @@ Format:
 2. ...
 3. ..."""
 
-    response = call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
     return response or ("لم أتمكن من إنشاء خارطة طريق. 🤖" if language == "ar" else "I couldn't generate a roadmap. 🤖")
 
 
-def generate_company_report(company_key: str, language: str = "ar") -> str:
+async def generate_company_report(company_key: str, language: str = "ar") -> str:
     """
     /company - تقرير عن شركة
     """
@@ -423,10 +441,10 @@ def generate_company_report(company_key: str, language: str = "ar") -> str:
         else:
             return f"❌ Company '{company_key}' not found.\n\nAvailable: " + ", ".join(COMPANY_DATA.keys())
 
-    # البحث عن أحدث أخبار الشركة
+    # البحث عن أحدث أخبار الشركة (بشكل غير متزامن)
     search_query = f"{company['name']} AI latest news 2025"
-    from web_search import search_news
-    news_results = search_news(search_query, max_results=3)
+    from web_search import search_news_async
+    news_results = await search_news_async(search_query, max_results=3)
 
     news_text = ""
     if news_results:
@@ -487,7 +505,7 @@ Format:
 🔮 <b>Outlook</b>
 → Future expectations"""
 
-    response = call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
 
     if response and news_text:
         response += news_text

@@ -1,8 +1,10 @@
 """
 بحث الويب - Web Search Module
 يستخدم DuckDuckGo (ddgs) للبحث مع تلخيص النتائج بالذكاء الاصطناعي
++ دعم المكالمات غير المتزامنة
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Optional
 
@@ -25,11 +27,8 @@ def _get_ddgs():
             return None
 
 
-def search_web(query: str, max_results: int = 5) -> List[Dict]:
-    """
-    البحث في الويب باستخدام DuckDuckGo
-    يرجع قائمة بالنتائج مع العناوين والروابط والمقتطفات
-    """
+def _search_web_sync(query: str, max_results: int = 5) -> List[Dict]:
+    """البحث في الويب (متزامن)"""
     DDGS = _get_ddgs()
     if DDGS is None:
         return []
@@ -54,16 +53,63 @@ def search_web(query: str, max_results: int = 5) -> List[Dict]:
         return []
 
 
-def search_and_summarize(query: str, language: str = "ar") -> str:
-    """
-    البحث في الويب وتلخيص النتائج بالذكاء الاصطناعي
-    """
-    from ai_engine import call_ai
+async def search_web(query: str, max_results: int = 5) -> List[Dict]:
+    """البحث في الويب (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _search_web_sync(query, max_results)
+    )
 
-    results = search_web(query, max_results=5)
+
+def _search_news_sync(query: str, max_results: int = 5) -> List[Dict]:
+    """البحث عن أخبار (متزامن)"""
+    DDGS = _get_ddgs()
+    if DDGS is None:
+        return []
+
+    try:
+        results = []
+        with DDGS() as ddgs:
+            search_results = list(ddgs.news(query, max_results=max_results))
+
+            for r in search_results:
+                results.append({
+                    "title": r.get("title", ""),
+                    "link": r.get("url", r.get("href", "")),
+                    "snippet": r.get("body", ""),
+                    "source": r.get("source", ""),
+                    "date": r.get("date", ""),
+                })
+
+        logger.info(f"DuckDuckGo news search for '{query}': found {len(results)} results")
+        return results
+
+    except Exception as e:
+        logger.error(f"DuckDuckGo news search error: {e}")
+        return []
+
+
+async def search_news_async(query: str, max_results: int = 5) -> List[Dict]:
+    """البحث عن أخبار (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _search_news_sync(query, max_results)
+    )
+
+
+# Keep sync version for backward compatibility (main.py uses it)
+def search_news(query: str, max_results: int = 5) -> List[Dict]:
+    """البحث عن أخبار محددة في الويب (متزامن)"""
+    return _search_news_sync(query, max_results)
+
+
+def _search_and_summarize_sync(query: str, language: str = "ar") -> str:
+    """البحث والتلخيص (متزامن)"""
+    from ai_engine import _call_ai_sync
+
+    results = _search_web_sync(query, max_results=5)
 
     if not results:
-        # لو مفيش نتائج بحث، نستخدم AI بس
         if language == "ar":
             prompt = f"""أجب على السؤال التالي بأفضل ما تعرفه. إذا لم تكن متأكداً، اذكر ذلك.
 
@@ -75,7 +121,7 @@ def search_and_summarize(query: str, language: str = "ar") -> str:
 Question: {query}"""
             system = "You are a smart assistant. Be accurate and use appropriate emojis."
 
-        response = call_ai(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
+        response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
         return response or ("لم أتمكن من العثور على معلومات. 🤖" if language == "ar" else "I couldn't find information. 🤖")
 
     # تجميع نتائج البحث
@@ -115,44 +161,26 @@ Format requirements:
 - Be concise but comprehensive"""
         system = "You are a smart assistant answering based on real search results. Use emojis and nice formatting."
 
-    response = call_ai(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
+    response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
     return response or ("لم أتمكن من معالجة نتائج البحث. 🤖" if language == "ar" else "I couldn't process search results. 🤖")
 
 
-def search_news(query: str, max_results: int = 5) -> List[Dict]:
-    """
-    البحث عن أخبار محددة في الويب
-    """
-    DDGS = _get_ddgs()
-    if DDGS is None:
-        return []
+async def search_and_summarize_async(query: str, language: str = "ar") -> str:
+    """البحث والتلخيص (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _search_and_summarize_sync(query, language)
+    )
 
-    try:
-        results = []
-        with DDGS() as ddgs:
-            search_results = list(ddgs.news(query, max_results=max_results))
 
-            for r in search_results:
-                results.append({
-                    "title": r.get("title", ""),
-                    "link": r.get("url", r.get("href", "")),
-                    "snippet": r.get("body", ""),
-                    "source": r.get("source", ""),
-                    "date": r.get("date", ""),
-                })
-
-        logger.info(f"DuckDuckGo news search for '{query}': found {len(results)} results")
-        return results
-
-    except Exception as e:
-        logger.error(f"DuckDuckGo news search error: {e}")
-        return []
+# Keep sync version for backward compatibility
+def search_and_summarize(query: str, language: str = "ar") -> str:
+    """البحث والتلخيص (متزامن - للتوافق مع الكود القديم)"""
+    return _search_and_summarize_sync(query, language)
 
 
 def format_search_results(query: str, results: List[Dict], language: str = "ar") -> str:
-    """
-    تنسيق نتائج البحث كرسالة تيليجرام جميلة
-    """
+    """تنسيق نتائج البحث كرسالة تيليجرام جميلة"""
     if not results:
         if language == "ar":
             return f"🔍 لم أجد نتائج لـ '{query}'"

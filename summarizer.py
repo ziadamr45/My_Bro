@@ -1,9 +1,12 @@
 """
 تلخيص الأخبار - News Summarizer Module
-يستخدم OpenRouter API (متوافق مع OpenAI) لتلخيص الأخبار بالعربية
+يستخدم OpenRouter API لتلخيص الأخبار بالعربية
++ دعم المكالمات غير المتزامنة
 """
 
+import asyncio
 import logging
+import time as time_module
 from typing import List, Dict, Optional
 
 import requests
@@ -18,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 def create_summary_prompt(articles: List[Dict]) -> str:
-    """
-    إنشاء الـ prompt لإرساله للنموذج
-    """
     articles_text = ""
     for i, article in enumerate(articles, 1):
         articles_text += f"\n--- الخبر {i} ---\n"
@@ -51,21 +51,16 @@ SUMMARY_END"""
 
 
 def parse_summaries(response_text: str, num_articles: int) -> List[str]:
-    """
-    استخراج التلخيصات من رد النموذج
-    """
     summaries = []
 
-    # محاولة استخراج بالصيغة المحددة
     parts = response_text.split("SUMMARY_START")
-    for part in parts[1:]:  # تجاهل الجزء الأول قبل أول SUMMARY_START
+    for part in parts[1:]:
         end_idx = part.find("SUMMARY_END")
         if end_idx != -1:
             summary = part[:end_idx].strip()
             if summary:
                 summaries.append(summary)
 
-    # لو الصيغة المحددة ماشتغلتش، بنقسم بالفقرات
     if len(summaries) != num_articles:
         summaries = []
         lines = response_text.strip().split("\n")
@@ -87,22 +82,16 @@ def parse_summaries(response_text: str, num_articles: int) -> List[str]:
             if summary_text and len(summary_text) > 10:
                 summaries.append(summary_text)
 
-    # التأكد من عدد التلخيصات
     if len(summaries) < num_articles:
-        # إضافة تلخيصات فارغة لو ناقصة
         while len(summaries) < num_articles:
             summaries.append("تفاصيل الخبر متاحة عبر الرابط المرفق.")
 
-    # اقتطاع لو زائدة
     summaries = summaries[:num_articles]
-
     return summaries
 
 
-def _call_openrouter(prompt: str, model: str) -> Optional[str]:
-    """
-    استدعاء OpenRouter API (متوافق مع OpenAI)
-    """
+def _call_openrouter_sync(prompt: str, model: str) -> Optional[str]:
+    """استدعاء OpenRouter API (متزامن)"""
     url = f"{OPENROUTER_BASE_URL}/chat/completions"
 
     headers = {
@@ -115,28 +104,16 @@ def _call_openrouter(prompt: str, model: str) -> Optional[str]:
     payload = {
         "model": model,
         "messages": [
-            {
-                "role": "system",
-                "content": "أنت مساعد عربي متخصص في أخبار الذكاء الاصطناعي. تجيب دائماً بالعربية الفصحى فقط."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "system", "content": "أنت مساعد عربي متخصص في أخبار الذكاء الاصطناعي. تجيب دائماً بالعربية الفصحى فقط."},
+            {"role": "user", "content": prompt}
         ],
         "temperature": 0.3,
         "max_tokens": 2048,
     }
 
     try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=REQUEST_TIMEOUT
-        )
+        response = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-
         data = response.json()
 
         if "choices" in data and len(data["choices"]) > 0:
@@ -144,7 +121,6 @@ def _call_openrouter(prompt: str, model: str) -> Optional[str]:
             if content:
                 return content
 
-        # التحقق من وجود خطأ في الرد
         if "error" in data:
             logger.warning(f"OpenRouter API error for {model}: {data['error']}")
 
@@ -158,17 +134,20 @@ def _call_openrouter(prompt: str, model: str) -> Optional[str]:
     return None
 
 
-def summarize_articles(articles: List[Dict]) -> List[Dict]:
-    """
-    تلخيص قائمة الأخبار باستخدام OpenRouter API
-    يجرب الموديل الرئيسي ثم الموديلات البديلة
-    """
+async def _call_openrouter(prompt: str, model: str) -> Optional[str]:
+    """استدعاء OpenRouter API (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _call_openrouter_sync(prompt, model)
+    )
+
+
+def _summarize_articles_sync(articles: List[Dict]) -> List[Dict]:
+    """تلخيص الأخبار (متزامن - للتوافق مع main.py)"""
     if not articles:
-        logger.warning("No articles to summarize")
         return articles
 
     if not OPENROUTER_API_KEY:
-        logger.error("OPENROUTER_API_KEY not set. Using descriptions as summaries.")
         for article in articles:
             article["arabic_summary"] = article.get("description", "")[:200]
         return articles
@@ -177,7 +156,6 @@ def summarize_articles(articles: List[Dict]) -> List[Dict]:
 
     prompt = create_summary_prompt(articles)
 
-    # قائمة الموديلات للتجربة (السريع أولاً + الرئيسي + البدائل)
     if FAST_MODEL:
         models_to_try = [FAST_MODEL, OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
     else:
@@ -186,11 +164,10 @@ def summarize_articles(articles: List[Dict]) -> List[Dict]:
     for attempt in range(MAX_RETRIES):
         for model in models_to_try:
             logger.info(f"Trying model: {model} (attempt {attempt + 1})")
-            result = _call_openrouter(prompt, model)
+            result = _call_openrouter_sync(prompt, model)
 
             if result:
                 summaries = parse_summaries(result, len(articles))
-
                 for i, article in enumerate(articles):
                     if i < len(summaries):
                         article["arabic_summary"] = summaries[i]
@@ -200,16 +177,21 @@ def summarize_articles(articles: List[Dict]) -> List[Dict]:
                 logger.info(f"Successfully summarized {len(summaries)} articles using {model}")
                 return articles
 
-        # انتظار قبل إعادة المحاولة
         if attempt < MAX_RETRIES - 1:
-            import time
             logger.info(f"Waiting {RETRY_DELAY}s before retry...")
-            time.sleep(RETRY_DELAY)
+            time_module.sleep(RETRY_DELAY)
 
-    # في حالة فشل كل المحاولات، نستخدم الوصف الأصلي
     logger.warning("All OpenRouter attempts failed. Using original descriptions.")
     for article in articles:
         desc = article.get("description", "")
         article["arabic_summary"] = desc[:200] if desc else "تفاصيل الخبر متاحة عبر الرابط المرفق."
 
     return articles
+
+
+async def summarize_articles(articles: List[Dict]) -> List[Dict]:
+    """تلخيص الأخبار (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _summarize_articles_sync(articles)
+    )
