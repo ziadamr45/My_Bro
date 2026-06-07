@@ -1412,8 +1412,14 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
 # تشغيل البوت - Main
 # ═══════════════════════════════════════
 
+# متغير عام للـ scheduler
+_scheduler = None
+
+
 def main():
     """تشغيل البوت مع الجدولة"""
+    global _scheduler
+
     logger.info("=" * 60)
     logger.info(f"🤖 {BOT_NAME} v{BOT_VERSION} Starting...")
     logger.info("=" * 60)
@@ -1446,28 +1452,14 @@ def main():
     # المحادثة الحرة
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # ═══ إعداد الجدولة (APScheduler) ═══
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone(DAILY_NEWS_TIMEZONE))
+    # ═══ إعداد الجدولة (APScheduler) - يتم تشغيله داخل event loop ═══
+    _scheduler = AsyncIOScheduler(timezone=pytz.timezone(DAILY_NEWS_TIMEZONE))
 
-    # بث الأخبار اليومية
-    scheduler.add_job(
-        broadcast_daily_news,
-        trigger="cron",
-        hour=DAILY_NEWS_HOUR,
-        minute=DAILY_NEWS_MINUTE,
-        id="daily_news_broadcast",
-        name="Daily AI News Broadcast",
-        kwargs={"context": None},  # سيتم تحديثه عند التشغيل
-    )
-
-    # وظيفة مخصصة لتشغيل الجدولة مع context البوت
     async def scheduled_broadcast():
         """بث مجدول مع context البوت"""
         await broadcast_daily_news(app)
 
-    # تحديث الوظيفة المجدولة
-    scheduler.remove_job("daily_news_broadcast")
-    scheduler.add_job(
+    _scheduler.add_job(
         scheduled_broadcast,
         trigger="cron",
         hour=DAILY_NEWS_HOUR,
@@ -1476,12 +1468,9 @@ def main():
         name="Daily AI News Broadcast",
     )
 
-    scheduler.start()
-    logger.info(f"📅 Scheduler started - Daily broadcast at {DAILY_NEWS_HOUR}:{DAILY_NEWS_MINUTE:02d} ({DAILY_NEWS_TIMEZONE})")
-
-    # تعيين أوامر البوت في تيليجرام
+    # تعيين أوامر البوت + تشغيل الجدولة بعد بدء event loop
     async def post_init(application):
-        """بعد تشغيل البوت"""
+        """بعد تشغيل البوت - inside event loop"""
         await application.bot.set_my_commands([
             ("start", "ابدأ / Start"),
             ("news", "أخبار AI / AI News"),
@@ -1499,6 +1488,10 @@ def main():
             ("help", "مساعدة / Help"),
         ])
         logger.info("✅ Bot commands set")
+
+        # تشغيل الجدولة هنا (داخل event loop)
+        _scheduler.start()
+        logger.info(f"📅 Scheduler started - Daily broadcast at {DAILY_NEWS_HOUR}:{DAILY_NEWS_MINUTE:02d} ({DAILY_NEWS_TIMEZONE})")
 
     app.post_init = post_init
 
