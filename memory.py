@@ -1,12 +1,13 @@
 """
 نظام الذاكرة - Memory System
 يخزن تفضيلات المستخدمين لكل محادثة
++ نظام الاشتراك في الأخبار اليومية
 """
 
 import json
 import os
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from config import DATA_DIR, USERS_FILE
@@ -55,6 +56,7 @@ def get_user(user_id: int) -> Dict:
             "language": "ar",
             "news_time": "09:00",
             "sources": [],
+            "subscribed": False,  # مش مشترك افتراضياً
             "created_at": datetime.now().isoformat(),
             "last_interaction": datetime.now().isoformat(),
             "commands_used": 0,
@@ -62,7 +64,13 @@ def get_user(user_id: int) -> Dict:
         }
         _save_all_users(all_users)
 
-    return all_users[uid]
+    # تأكد إن الحقل موجود للمستخدمين القدام
+    user = all_users[uid]
+    if "subscribed" not in user:
+        user["subscribed"] = False
+        _save_all_users(all_users)
+
+    return user
 
 
 def update_user(user_id: int, updates: Dict[str, Any]):
@@ -114,6 +122,47 @@ def get_sources(user_id: int) -> list:
 def set_sources(user_id: int, sources: list):
     """تعيين المصادر المفضلة"""
     update_user(user_id, {"sources": sources})
+
+
+def subscribe_user(user_id: int):
+    """اشتراك المستخدم في الأخبار اليومية"""
+    update_user(user_id, {"subscribed": True})
+
+
+def unsubscribe_user(user_id: int):
+    """إلغاء اشتراك المستخدم"""
+    update_user(user_id, {"subscribed": False})
+
+
+def is_subscribed(user_id: int) -> bool:
+    """هل المستخدم مشترك؟"""
+    user = get_user(user_id)
+    return user.get("subscribed", False)
+
+
+def get_all_subscribers() -> List[Dict]:
+    """
+    الحصول على كل المشتركين في الأخبار اليومية
+    يرجع قائمة بـ {user_id, language, news_time, name}
+    """
+    all_users = _load_all_users()
+    subscribers = []
+
+    for uid, data in all_users.items():
+        if data.get("subscribed", False):
+            subscribers.append({
+                "user_id": int(uid),
+                "language": data.get("language", "ar"),
+                "news_time": data.get("news_time", "09:00"),
+                "name": data.get("name", ""),
+            })
+
+    return subscribers
+
+
+def get_subscriber_count() -> int:
+    """عدد المشتركين"""
+    return len(get_all_subscribers())
 
 
 def increment_command_count(user_id: int):

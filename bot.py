@@ -19,12 +19,15 @@ from ai_engine import smart_chat, ask_question, explain_topic, generate_roadmap,
 from memory import (
     get_user, get_language, set_language, get_news_time,
     set_news_time, set_sources, get_sources,
-    increment_command_count, increment_chat_count
+    increment_command_count, increment_chat_count,
+    subscribe_user, unsubscribe_user, is_subscribed,
+    get_all_subscribers, get_subscriber_count
 )
 from formatters import (
     welcome_message, help_message, format_news_item,
     format_trending_item, format_error, format_loading,
-    language_selection, time_selection, sources_selection
+    language_selection, time_selection, sources_selection,
+    subscription_prompt, subscription_confirmed, unsubscription_confirmed
 )
 from news_fetcher import fetch_news
 from filters import filter_news, is_ai_related
@@ -120,9 +123,11 @@ def get_learn_inline_buttons(language: str = "ar") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_settings_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
+def get_settings_keyboard(language: str = "ar", user_subscribed: bool = False) -> InlineKeyboardMarkup:
     """أزرار لوحة الإعدادات"""
     if language == "ar":
+        sub_btn_text = "❌ إلغاء الاشتراك" if user_subscribed else "📬 اشترك في الأخبار"
+        sub_btn_data = "settings_unsubscribe" if user_subscribed else "settings_subscribe"
         keyboard = [
             [
                 InlineKeyboardButton("🌐 اللغة", callback_data="settings_language"),
@@ -130,10 +135,15 @@ def get_settings_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("📡 المصادر", callback_data="settings_sources"),
+                InlineKeyboardButton(sub_btn_text, callback_data=sub_btn_data),
+            ],
+            [
                 InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="cmd_start"),
             ],
         ]
     else:
+        sub_btn_text = "❌ Unsubscribe" if user_subscribed else "📬 Subscribe to News"
+        sub_btn_data = "settings_unsubscribe" if user_subscribed else "settings_subscribe"
         keyboard = [
             [
                 InlineKeyboardButton("🌐 Language", callback_data="settings_language"),
@@ -141,7 +151,29 @@ def get_settings_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("📡 Sources", callback_data="settings_sources"),
+                InlineKeyboardButton(sub_btn_text, callback_data=sub_btn_data),
+            ],
+            [
                 InlineKeyboardButton("🔙 Main Menu", callback_data="cmd_start"),
+            ],
+        ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_subscribe_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
+    """أزرار الاشتراك"""
+    if language == "ar":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ اشترك الآن", callback_data="settings_subscribe"),
+                InlineKeyboardButton("لا شكراً", callback_data="skip_subscribe"),
+            ],
+        ]
+    else:
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Subscribe Now", callback_data="settings_subscribe"),
+                InlineKeyboardButton("No Thanks", callback_data="skip_subscribe"),
             ],
         ]
     return InlineKeyboardMarkup(keyboard)
@@ -257,6 +289,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True,
         reply_markup=keyboard
     )
+
+    # لو المستخدم مش مشترك، اسأله يشترك
+    if not is_subscribed(user_id):
+        import asyncio
+        await asyncio.sleep(1.5)  # انتظر شوية عشان الرسالة الترحيبية تظهر الأول
+        sub_keyboard = get_subscribe_keyboard(lang)
+        await update.message.reply_text(
+            subscription_prompt(lang),
+            parse_mode="HTML",
+            reply_markup=sub_keyboard
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -862,12 +905,37 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(sources_selection(lang), parse_mode="HTML")
 
     elif data == "settings_menu":
-        keyboard = get_settings_keyboard(lang)
+        user_sub = is_subscribed(user_id)
+        keyboard = get_settings_keyboard(lang, user_sub)
+        sub_status = "✅ مشترك" if user_sub else "❌ مش مشترك"
         if lang == "ar":
-            msg = "⚙️ <b>الإعدادات</b>\n\nاختر ما تريد تغييره:"
+            msg = f"⚙️ <b>الإعدادات</b>\n\n📬 حالة الاشتراك: {sub_status}\n\nاختر ما تريد تغييره:"
         else:
-            msg = "⚙️ <b>Settings</b>\n\nChoose what to change:"
+            sub_status_en = "✅ Subscribed" if user_sub else "❌ Not subscribed"
+            msg = f"⚙️ <b>Settings</b>\n\n📬 Subscription: {sub_status_en}\n\nChoose what to change:"
         await query.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
+
+    # ═══ الاشتراك في الأخبار ═══
+    elif data == "settings_subscribe":
+        subscribe_user(user_id)
+        keyboard = get_main_keyboard(lang)
+        await query.message.edit_text(
+            subscription_confirmed(lang),
+            parse_mode="HTML"
+        )
+
+    elif data == "settings_unsubscribe":
+        unsubscribe_user(user_id)
+        await query.message.edit_text(
+            unsubscription_confirmed(lang),
+            parse_mode="HTML"
+        )
+
+    elif data == "skip_subscribe":
+        if lang == "ar":
+            await query.message.edit_text("👌 لا مشكلة! ممكن تشترك أي وقت من ⚙️ الإعدادات")
+        else:
+            await query.message.edit_text("👌 No problem! You can subscribe anytime from ⚙️ Settings")
 
     # ═══ تغيير اللغة ═══
     elif data == "lang_ar":
@@ -1180,11 +1248,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
 
         elif action == "settings":
-            keyboard = get_settings_keyboard(lang)
+            user_sub = is_subscribed(user_id)
+            keyboard = get_settings_keyboard(lang, user_sub)
+            sub_status = "✅ مشترك" if user_sub else "❌ مش مشترك"
             if lang == "ar":
-                msg = "⚙️ <b>الإعدادات</b>\n\nاختر ما تريد تغييره:"
+                msg = f"⚙️ <b>الإعدادات</b>\n\n📬 حالة الاشتراك: {sub_status}\n\nاختر ما تريد تغييره:"
             else:
-                msg = "⚙️ <b>Settings</b>\n\nChoose what to change:"
+                sub_status_en = "✅ Subscribed" if user_sub else "❌ Not subscribed"
+                msg = f"⚙️ <b>Settings</b>\n\n📬 Subscription: {sub_status_en}\n\nChoose what to change:"
             await update.message.reply_text(msg, parse_mode="HTML", reply_markup=keyboard)
 
         elif action == "help":
@@ -1276,6 +1347,115 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════
+# بث الأخبار اليومي للمشتركين - Daily Broadcast
+# ═══════════════════════════════════════
+
+async def send_daily_news_broadcast(application):
+    """
+    بث الأخبار اليومية لكل المشتركين
+    بيشتغل تلقائياً الساعة 9 الصبح بتوقيت القاهرة
+    """
+    subscribers = get_all_subscribers()
+
+    if not subscribers:
+        logger.info("No subscribers - skipping daily broadcast")
+        return
+
+    logger.info(f"Starting daily broadcast for {len(subscribers)} subscribers")
+
+    try:
+        # جلب وتحضير الأخبار
+        articles = fetch_news()
+        if not articles:
+            logger.info("No news articles found - skipping broadcast")
+            return
+
+        filtered = filter_news(articles)
+        if not filtered:
+            logger.info("No AI-related news - skipping broadcast")
+            return
+
+        ranked = rank_articles(filtered)
+        summarized = summarize_articles(ranked)
+
+        now = datetime.now(timezone(timedelta(hours=2)))
+        days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+        months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+        # إرسال لكل مشترك بلغته
+        success = 0
+        failed = 0
+
+        for sub in subscribers:
+            user_id = sub["user_id"]
+            lang = sub.get("language", "ar")
+
+            try:
+                if lang == "ar":
+                    date_str = f"{days_ar[now.weekday()]}, {now.day} {months_ar[now.month]} {now.year}"
+                    header = f"📰 <b>أخبار الذكاء الاصطناعي اليوم</b>\n📅 {date_str}\n\n━━━━━━━━━━━━━━━━━\n\n"
+                else:
+                    date_str = now.strftime("%A, %B %d, %Y")
+                    header = f"📰 <b>Today's AI News</b>\n📅 {date_str}\n\n━━━━━━━━━━━━━━━━━\n\n"
+
+                items = []
+                for i, article in enumerate(summarized):
+                    is_top = article.get("is_top", False)
+                    item = format_news_item(
+                        i + 1,
+                        article.get("title", ""),
+                        article.get("arabic_summary", article.get("description", "")[:200]),
+                        article.get("link", ""),
+                        is_top
+                    )
+                    items.append(item)
+
+                if lang == "ar":
+                    footer = "\n\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — أخبار يومية</i>"
+                else:
+                    footer = "\n\n━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — Daily News</i>"
+
+                message = header + "\n\n".join(items) + footer
+
+                inline_keyboard = get_news_inline_buttons(lang)
+
+                # تقسيم لو الرسالة طويلة
+                if len(message) > 4000:
+                    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+                    for i, chunk in enumerate(chunks):
+                        if i == len(chunks) - 1:
+                            await application.bot.send_message(
+                                chat_id=user_id, text=chunk, parse_mode="HTML",
+                                disable_web_page_preview=True, reply_markup=inline_keyboard
+                            )
+                        else:
+                            await application.bot.send_message(
+                                chat_id=user_id, text=chunk, parse_mode="HTML",
+                                disable_web_page_preview=True
+                            )
+                else:
+                    await application.bot.send_message(
+                        chat_id=user_id, text=message, parse_mode="HTML",
+                        disable_web_page_preview=True, reply_markup=inline_keyboard
+                    )
+
+                success += 1
+
+            except Exception as e:
+                failed += 1
+                logger.error(f"Failed to send to {user_id}: {e}")
+                # لو المستخدم قفل البوت، نلغي اشتراكه
+                if "blocked" in str(e).lower() or "deactivated" in str(e).lower():
+                    unsubscribe_user(user_id)
+                    logger.info(f"Unsubscribed blocked user: {user_id}")
+
+        logger.info(f"Daily broadcast complete: {success} sent, {failed} failed")
+
+    except Exception as e:
+        logger.error(f"Error in daily broadcast: {e}")
+
+
+# ═══════════════════════════════════════
 # تشغيل البوت
 # ═══════════════════════════════════════
 
@@ -1331,6 +1511,27 @@ def main():
         ]
         await application.bot.set_my_commands(commands)
         logger.info("Bot commands registered")
+
+        # ═══ إعداد الجدول اليومي لبث الأخبار ═══
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            scheduler = AsyncIOScheduler(timezone="Africa/Cairo")
+
+            # بث الأخبار يومياً الساعة 9 الصبح بتوقيت القاهرة
+            scheduler.add_job(
+                send_daily_news_broadcast,
+                "cron",
+                hour=9,
+                minute=0,
+                args=[application],
+                id="daily_news_broadcast",
+                replace_existing=True,
+            )
+
+            scheduler.start()
+            logger.info("Daily news broadcast scheduled at 09:00 Cairo time")
+        except ImportError:
+            logger.warning("APScheduler not installed. Daily broadcast disabled. Install with: pip install APScheduler")
 
     app.post_init = post_init
 

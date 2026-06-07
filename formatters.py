@@ -127,6 +127,60 @@ def format_loading(language: str = "ar") -> str:
     return "⏳ Processing...\n 🔴⚪⚪"
 
 
+def subscription_prompt(language: str = "ar") -> str:
+    """رسالة طلب الاشتراك في الأخبار اليومية"""
+    if language == "ar":
+        return """📬 <b>اشترك في الأخبار اليومية!</b>
+━━━━━━━━━━━━━━━━━
+
+هابعتلك أهم أخبار الذكاء الاصطناعي كل يوم الساعة 9 الصبح بتوقيت القاهرة 🌅
+
+✅ آخر أخبار AI من مصادر عالمية
+✅ ملخص بالعربية مفهوم وبسيط
+✅ مجاني تماماً
+
+👇 اضغط على الزر بالأسفل عشان تشترك!"""
+    else:
+        return """📬 <b>Subscribe to Daily News!</b>
+━━━━━━━━━━━━━━━━━
+
+I'll send you the most important AI news every day at 9 AM Cairo time 🌅
+
+✅ Latest AI news from global sources
+✅ Clear and simple summaries
+✅ Completely free
+
+👇 Tap the button below to subscribe!"""
+
+
+def subscription_confirmed(language: str = "ar") -> str:
+    """رسالة تأكيد الاشتراك"""
+    if language == "ar":
+        return """✅ <b>تم الاشتراك بنجاح!</b>
+
+📬 هابعتلك أخبار AI كل يوم الساعة 9 الصبح
+💡 ممكن تلغي الاشتراك أي وقت من ⚙️ الإعدادات"""
+    else:
+        return """✅ <b>Subscribed successfully!</b>
+
+📬 I'll send you AI news every day at 9 AM
+💡 You can unsubscribe anytime from ⚙️ Settings"""
+
+
+def unsubscription_confirmed(language: str = "ar") -> str:
+    """رسالة تأكيد إلغاء الاشتراك"""
+    if language == "ar":
+        return """❌ <b>تم إلغاء الاشتراك</b>
+
+لن تصلك الأخبار اليومية بعد الآن.
+💡 ممكن تشترك تاني أي وقت من ⚙️ الإعدادات"""
+    else:
+        return """❌ <b>Unsubscribed</b>
+
+You won't receive daily news anymore.
+💡 You can re-subscribe anytime from ⚙️ Settings"""
+
+
 def language_selection() -> str:
     """رسالة اختيار اللغة"""
     return """🌐 <b>اختر اللغة / Choose Language</b>
