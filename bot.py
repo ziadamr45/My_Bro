@@ -1607,6 +1607,11 @@ def main():
     logger.info(f"🤖 {BOT_NAME} v{BOT_VERSION} Starting...")
     logger.info("=" * 60)
 
+    # التأكد من إن BOT_TOKEN موجود
+    if not BOT_TOKEN:
+        logger.error("❌ BOT_TOKEN not set! Set it as environment variable.")
+        sys.exit(1)
+
     # بناء التطبيق
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1647,7 +1652,11 @@ def main():
 
     async def scheduled_broadcast():
         """بث مجدول مع context البوت"""
-        await broadcast_daily_news(app)
+        # إنشاء context وهمي فيه bot فقط عشان broadcast_daily_news يشتغل
+        class FakeContext:
+            def __init__(self, bot):
+                self.bot = bot
+        await broadcast_daily_news(FakeContext(app.bot))
 
     _scheduler.add_job(
         scheduled_broadcast,
