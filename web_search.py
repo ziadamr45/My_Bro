@@ -1,6 +1,6 @@
 """
 بحث الويب - Web Search Module
-يستخدم DuckDuckGo للبحث مع تلخيص النتائج بالذكاء الاصطناعي
+يستخدم DuckDuckGo (ddgs) للبحث مع تلخيص النتائج بالذكاء الاصطناعي
 """
 
 import logging
@@ -11,14 +11,30 @@ from config import REQUEST_TIMEOUT
 logger = logging.getLogger(__name__)
 
 
+def _get_ddgs():
+    """استيراد DDGS من الحزمة المناسبة"""
+    try:
+        from ddgs import DDGS
+        return DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+            return DDGS
+        except ImportError:
+            logger.warning("Neither ddgs nor duckduckgo-search is installed")
+            return None
+
+
 def search_web(query: str, max_results: int = 5) -> List[Dict]:
     """
     البحث في الويب باستخدام DuckDuckGo
     يرجع قائمة بالنتائج مع العناوين والروابط والمقتطفات
     """
-    try:
-        from duckduckgo_search import DDGS
+    DDGS = _get_ddgs()
+    if DDGS is None:
+        return []
 
+    try:
         results = []
         with DDGS() as ddgs:
             search_results = list(ddgs.text(query, max_results=max_results))
@@ -33,9 +49,6 @@ def search_web(query: str, max_results: int = 5) -> List[Dict]:
         logger.info(f"DuckDuckGo search for '{query}': found {len(results)} results")
         return results
 
-    except ImportError:
-        logger.warning("duckduckgo-search not installed, falling back to AI-only")
-        return []
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
         return []
@@ -110,9 +123,11 @@ def search_news(query: str, max_results: int = 5) -> List[Dict]:
     """
     البحث عن أخبار محددة في الويب
     """
-    try:
-        from duckduckgo_search import DDGS
+    DDGS = _get_ddgs()
+    if DDGS is None:
+        return []
 
+    try:
         results = []
         with DDGS() as ddgs:
             search_results = list(ddgs.news(query, max_results=max_results))
@@ -129,9 +144,6 @@ def search_news(query: str, max_results: int = 5) -> List[Dict]:
         logger.info(f"DuckDuckGo news search for '{query}': found {len(results)} results")
         return results
 
-    except ImportError:
-        logger.warning("duckduckgo-search not installed")
-        return []
     except Exception as e:
         logger.error(f"DuckDuckGo news search error: {e}")
         return []
@@ -164,7 +176,7 @@ def format_search_results(query: str, results: List[Dict], language: str = "ar")
             if source:
                 message += f"   📡 {source}\n"
             if link:
-                message += f"   🔗 <a href=\"{link}\">اقرأ المزيد</a>\n"
+                message += f'   🔗 <a href="{link}">اقرأ المزيد</a>\n'
         else:
             message += f"{i}. 📄 <b>{title}</b>\n"
             if snippet:
@@ -172,7 +184,7 @@ def format_search_results(query: str, results: List[Dict], language: str = "ar")
             if source:
                 message += f"   📡 {source}\n"
             if link:
-                message += f"   🔗 <a href=\"{link}\">Read more</a>\n"
+                message += f'   🔗 <a href="{link}">Read more</a>\n'
         message += "\n"
 
     message += "━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — بحث الويب</i>"
