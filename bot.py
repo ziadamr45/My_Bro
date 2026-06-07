@@ -241,13 +241,18 @@ def get_roadmap_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """أمر /start - شاشة ترحيب احترافية"""
     user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or "صديقي"
     lang = get_language(user_id)
     increment_command_count(user_id)
+
+    # حفظ اسم المستخدم
+    from memory import update_user
+    update_user(user_id, {"name": user_name})
 
     keyboard = get_main_keyboard(lang)
 
     await update.message.reply_text(
-        welcome_message(lang),
+        welcome_message(lang, user_name),
         parse_mode="HTML",
         disable_web_page_preview=True,
         reply_markup=keyboard
@@ -780,8 +785,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ═══ أوامر من الأزرار ═══
     if data == "cmd_start":
         keyboard = get_main_keyboard(lang)
+        user_name = query.from_user.first_name or ""
         await query.message.reply_text(
-            welcome_message(lang),
+            welcome_message(lang, user_name),
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=keyboard

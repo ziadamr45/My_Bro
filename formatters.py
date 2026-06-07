@@ -4,38 +4,39 @@
 """
 
 
-def welcome_message(language: str = "ar") -> str:
+def welcome_message(language: str = "ar", user_name: str = "") -> str:
     """رسالة الترحيب الاحترافية"""
+    name_part = f" {user_name}" if user_name else ""
     if language == "ar":
-        return """👋 <b>أهلاً بك في My Bro</b>
+        return f"""🤖 <b>أهلاً بك{name_part} في My Bro</b>
+━━━━━━━━━━━━━━━━━
 
-أنا مساعدك الذكي لمتابعة عالم الذكاء الاصطناعي.
+مساعدك الذكي لمتابعة عالم الذكاء الاصطناعي 🧠
 
-يمكنني مساعدتك في:
+📰 <b>الأخبار</b> — آخر أخبار AI لحظة بلحظة
+🤖 <b>اسألني</b> — أي سؤال وهيكون عندك إجابة
+📚 <b>تعلّم</b> — شروحات وخرائط طريق
+🔍 <b>ابحث</b> — بحث في الأخبار والويب
+📈 <b>التريندات</b> — أكثر المواضيع رواجاً
+🏢 <b>الشركات</b> — تقارير عن شركات AI
 
-📰 أخبار الذكاء الاصطناعي
-🤖 الإجابة على الأسئلة
-📚 التعلم والتطوير
-🔍 البحث عن الأخبار
-📈 متابعة التريندات
-🏢 متابعة الشركات
-
-اختر من الأزرار بالأسفل أو اكتب سؤالك مباشرة. 💬"""
+━━━━━━━━━━━━━━━━━
+💡 <i>اختار من الأزرار بالأسفل أو اكتب سؤالك مباشرة!</i>"""
     else:
-        return """👋 <b>Welcome to My Bro</b>
+        return f"""🤖 <b>Welcome{name_part} to My Bro</b>
+━━━━━━━━━━━━━━━━━
 
-I'm your smart AI assistant for following the AI world.
+Your smart AI assistant for the AI world 🧠
 
-I can help you with:
+📰 <b>News</b> — Latest AI news in real-time
+🤖 <b>Ask Me</b> — Any question, answered instantly
+📚 <b>Learn</b> — Tutorials & learning roadmaps
+🔍 <b>Search</b> — Search news & the web
+📈 <b>Trending</b> — Hottest AI topics
+🏢 <b>Companies</b> — AI company reports
 
-📰 AI News
-🤖 Answering Questions
-📚 Learning & Development
-🔍 Searching News
-📈 Following Trends
-🏢 Company Reports
-
-Choose from buttons below or just type your question. 💬"""
+━━━━━━━━━━━━━━━━━
+💡 <i>Choose from buttons below or just type your question!</i>"""
 
 
 def help_message(language: str = "ar") -> str:
