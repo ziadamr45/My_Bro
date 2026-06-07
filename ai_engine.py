@@ -176,16 +176,25 @@ def _call_ai_sync(
                     error_msg = data.get("error", {})
                     if isinstance(error_msg, dict):
                         error_msg = error_msg.get("message", str(error_msg))
+                    # لو rate limit أو موديل مش متاح، نحاول اللي بعده
+                    if "429" in str(error_msg) or "rate limit" in str(error_msg).lower():
+                        logger.warning(f"Rate limited, stopping all retries to save quota")
+                        return None
                     logger.warning(f"API error for {model}: {error_msg}")
                     continue
 
             except requests.exceptions.Timeout:
                 logger.warning(f"Timeout ({timeout}s) for model {model}")
             except requests.exceptions.RequestException as e:
-                if "403" in str(e) or "401" in str(e):
+                error_str = str(e)
+                if "403" in error_str or "401" in error_str:
                     logger.warning(f"Auth/region error for {model}, trying next")
                     continue
-                logger.warning(f"Request error for {model}: {str(e)[:100]}")
+                if "429" in error_str:
+                    logger.warning(f"Rate limited for {model}, stopping retries")
+                    # لو وصلنا للحد، مفيش فايدة نحاول تاني
+                    return None
+                logger.warning(f"Request error for {model}: {error_str[:100]}")
             except Exception as e:
                 logger.warning(f"Error for {model}: {str(e)[:100]}")
 
