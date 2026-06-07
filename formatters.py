@@ -3,6 +3,88 @@
 رسائل جميلة ومنظمة مع إيموجي وفواصل
 """
 
+import re
+
+
+def clean_ai_response(text: str) -> str:
+    """
+    تنظيف رد AI من رموز Markdown الزيادة
+    البوت بيستخدم HTML في تيليجرام، فـ Markdown بيبان كرموز غريبة
+    بنحول الـ Markdown لـ HTML أو بنشيله لو مش محتاجينه
+    """
+    if not text:
+        return text
+
+    # 1. تحويل **text** أو __text__ لـ <b>text</b> (bold)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+
+    # 2. تحويل *text* أو _text_ لـ <i>text</i> (italic) - بس لو مش جوا tag
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!_)_(?!_)(.+?)(<!_)_(?!_)', r'<i>\1</i>', text)
+
+    # 3. تحويل ~~text~~ لـ <s>text</s> (strikethrough)
+    text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text)
+
+    # 4. تحويل `code` لـ <code>code</code>
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+
+    # 5. تحويل ```code block``` لـ <code>code</code>
+    text = re.sub(r'```\w*\n?(.*?)```', r'<code>\1</code>', text, flags=re.DOTALL)
+
+    # 6. شيل ### و ## و # (عناوين Markdown)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+
+    # 7. شيل --- أو *** أو ___ (خطوط أفقية)
+    text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+
+    # 8. شيل | من الجداول (pipe)
+    # لو في سطر فيه | كتير يبقى جدول - نحوله لأسطر عادية
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # لو السطر فيه أكتر من 2 | يبقى ممكن يكون جدول
+        if line.count('|') >= 2:
+            # نشيل | من البداية والنهاية ونحول | لـ فاصلة
+            line = line.strip('|')
+            line = re.sub(r'\s*\|\s*', ' — ', line)
+            # لو السطر ده فاصل بتاع جدول (---) نشيله
+            if re.match(r'^[\s\-—:]+$', line):
+                continue
+        cleaned_lines.append(line)
+    text = '\n'.join(cleaned_lines)
+
+    # 9. شيل - في بداية السطور (bullet points) واستبدله بـ •
+    text = re.sub(r'^[-*]\s+', '• ', text, flags=re.MULTILINE)
+
+    # 10. شيل > في بداية السطور (quotes)
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+
+    # 11. شيل أي * متبقية لوحدها (مش جوا tag)
+    # بخلص الـ * اللي متبقية بره الـ HTML tags
+    result = []
+    in_tag = False
+    for char in text:
+        if char == '<':
+            in_tag = True
+            result.append(char)
+        elif char == '>':
+            in_tag = False
+            result.append(char)
+        elif char == '*' and not in_tag:
+            continue  # شيل الـ * البره
+        else:
+            result.append(char)
+    text = ''.join(result)
+
+    # 12. شيل مسافات زيادة في نهاية السطور
+    text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
+
+    # 13. شيل أسطر فاضية متكررة (أكتر من 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
 
 def welcome_message(language: str = "ar", user_name: str = "") -> str:
     """رسالة الترحيب الاحترافية"""

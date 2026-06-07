@@ -113,13 +113,17 @@ def _search_and_summarize_sync(query: str, language: str = "ar") -> str:
         if language == "ar":
             prompt = f"""أجب على السؤال التالي بأفضل ما تعرفه. إذا لم تكن متأكداً، اذكر ذلك.
 
-السؤال: {query}"""
-            system = "أنت مساعد ذكي تجيب بالعربية الفصحى. كن دقيقاً واستخدم إيموجي مناسبة."
+السؤال: {query}
+
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code>"""
+            system = "أنت مساعد ذكي تجيب بالعربية الفصحى. كن دقيقاً واستخدم إيموجي مناسبة. ماتستخدمش Markdown أبداً."
         else:
             prompt = f"""Answer the following question to the best of your knowledge. If unsure, say so.
 
-Question: {query}"""
-            system = "You are a smart assistant. Be accurate and use appropriate emojis."
+Question: {query}
+
+⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code>"""
+            system = "You are a smart assistant. Be accurate and use appropriate emojis. NEVER use Markdown."
 
         response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
         return response or ("لم أتمكن من العثور على معلومات. 🤖" if language == "ar" else "I couldn't find information. 🤖")
@@ -144,8 +148,10 @@ Question: {query}"""
 - إجابة واضحة ومفيدة
 - استخدم إيموجي مناسبة
 - أضف الروابط المفيدة: 🔗 <a href="الرابط">عنوان الرابط</a>
-- كن مختصراً لكن شاملاً"""
-        system = "أنت مساعد ذكي يجيب بالعربية الفصحى بناءً على نتائج بحث حقيقية. استخدم إيموجي وتنسيق جميل."
+- كن مختصراً لكن شاملاً
+
+⚠️ ماتستخدمش Markdown أبداً (لا *, **, #, |, ---). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
+        system = "أنت مساعد ذكي يجيب بالعربية الفصحى بناءً على نتائج بحث حقيقية. استخدم إيموجي وتنسيق HTML جميل. ماتستخدمش Markdown أبداً."
     else:
         prompt = f"""Based on the following search results, answer the user's question in English.
 Include useful links in your answer using HTML format.
@@ -158,8 +164,10 @@ Format requirements:
 - Clear and helpful answer
 - Use appropriate emojis
 - Include useful links: 🔗 <a href="link">Link title</a>
-- Be concise but comprehensive"""
-        system = "You are a smart assistant answering based on real search results. Use emojis and nice formatting."
+- Be concise but comprehensive
+
+⚠️ NEVER use Markdown (no *, **, #, |, ---). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
+        system = "You are a smart assistant answering based on real search results. Use emojis and nice HTML formatting. NEVER use Markdown."
 
     response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
     return response or ("لم أتمكن من معالجة نتائج البحث. 🤖" if language == "ar" else "I couldn't process search results. 🤖")

@@ -121,7 +121,7 @@ def _call_ai_sync(
         return None
 
     if prefer_arabic and not system_prompt:
-        system_prompt = "أنت مساعد ذكي تجيب بالعربية الفصحى دائماً. استخدم تنسيق جميل مع إيموجي."
+        system_prompt = "أنت مساعد ذكي تجيب بالعربية الفصحى دائماً. استخدم تنسيق HTML جميل مع إيموجي. ماتستخدمش Markdown أبداً (لا *, **, #, |). استخدم <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط."
 
     url = f"{OPENROUTER_BASE_URL}/chat/completions"
 
@@ -288,11 +288,19 @@ Made with love in Egypt 🇪🇬"""
 - فهم قصد المستخدم تلقائياً
 - أجب بذكاء ووضوح
 - استخدم إيموجي مناسبة
-- استخدم تنسيق جميل (عناوين، نقاط، فواصل)
 - إذا سأل عن أخبار AI، اذكر أحدث ما تعرفه
 - إذا سأل سؤال تقني، اشرح ببساطة
 - كن ودود ومفيد
-- لا تقل "لا أستطيع تصفح المواقع" - أنت تملك القدرة على البحث الآن!"""
+- لا تقل "لا أستطيع تصفح المواقع" - أنت تملك القدرة على البحث الآن!
+
+⚠️ تنسيق الرسائل مهم جداً:
+- الرسائل بتظهر في تيليجرام اللي بيدعم HTML فقط
+- ماتستخدمش Markdown أبداً (لا *, **, #, |, ---)
+- استخدم <b>نص</b> للعريض و <i>نص</i> للمائل
+- استخدم <code>نص</code> للأكواد
+- استخدم • للنقاط بدل - أو *
+- اكتب الكلام بطريقة طبيعية ومريحة للقراءة
+- متعملش الكلام كله عريض - استخدم العريض للعناوين فقط"""
         if memory_context:
             system += f"""
 
@@ -309,11 +317,19 @@ Rules:
 - Understand user intent automatically
 - Answer intelligently and clearly
 - Use appropriate emojis
-- Use beautiful formatting (headings, bullets, separators)
 - If asked about AI news, share what you know
 - If asked technical questions, explain simply
 - Be friendly and helpful
-- Never say "I can't browse websites" - you now have web search capability!"""
+- Never say "I can't browse websites" - you now have web search capability!
+
+⚠️ Message formatting is critical:
+- Messages appear in Telegram which supports HTML only
+- NEVER use Markdown (no *, **, #, |, ---)
+- Use <b>text</b> for bold and <i>text</i> for italic
+- Use <code>text</code> for code
+- Use • for bullet points instead of - or *
+- Write in a natural, readable way
+- Don't make everything bold - use bold for headings only"""
         if memory_context:
             system += f"""
 
@@ -343,14 +359,20 @@ async def ask_question(question: str, language: str = "ar") -> str:
 - 📌 عنوان للإجابة
 - شرح واضح مع أمثلة
 - نقاط رئيسية
-- روابط أو مراجع إن أمكن"""
+- روابط أو مراجع إن أمكن
+
+⚠️ تنسيق مهم: ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط:
+<b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
     else:
         system = """You are an AI expert. Answer questions in English in detail and organized format.
 Use:
 - 📌 Title for the answer
 - Clear explanation with examples
 - Key points
-- Links or references if possible"""
+- Links or references if possible
+
+⚠️ Formatting: NEVER use Markdown (no *, **, #, |). Use HTML only:
+<b>bold</b> <i>italic</i> <code>code</code> • bullets"""
 
     response = await call_ai(question, system_prompt=system, temperature=0.5, max_tokens=2048)
     return response or ("لم أتمكن من الإجابة. 🤖" if language == "ar" else "I couldn't answer that. 🤖")
@@ -377,7 +399,9 @@ async def explain_topic(topic: str, language: str = "ar") -> str:
 → كيف يُستخدم اليوم
 
 📖 <b>مصادر للتعلم</b>
-→ أين يمكن التعمق أكثر"""
+→ أين يمكن التعمق أكثر
+
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط."""
     else:
         prompt = f"""Explain "{topic}" in an educational and simple way in English.
 
@@ -395,7 +419,9 @@ Format:
 → How it's used today
 
 📖 <b>Learning Resources</b>
-→ Where to learn more"""
+→ Where to learn more
+
+⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
     response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
     return response or ("لم أتمكن من شرح الموضوع. 🤖" if language == "ar" else "I couldn't explain this topic. 🤖")
@@ -457,7 +483,9 @@ async def generate_roadmap(topic: str, language: str = "ar") -> str:
 🔴 <b>متقدم</b>
 1. ...
 2. ...
-3. ..."""
+3. ...
+
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط."""
     else:
         prompt = f"""Create a learning roadmap for "{topic}" in English.
 
@@ -477,7 +505,9 @@ Format:
 🔴 <b>Advanced</b>
 1. ...
 2. ...
-3. ..."""
+3. ...
+
+⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
     response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
     return response or ("لم أتمكن من إنشاء خارطة طريق. 🤖" if language == "ar" else "I couldn't generate a roadmap. 🤖")
@@ -539,7 +569,9 @@ async def generate_company_report(company_key: str, language: str = "ar") -> str
 → التحديات الحالية
 
 🔮 <b>التوقعات</b>
-→ ما نتوقعه مستقبلاً"""
+→ ما نتوقعه مستقبلاً
+
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط."""
     else:
         prompt = f"""Create a company intelligence report for {company['name']} in English.
 
@@ -564,7 +596,9 @@ Format:
 → Current challenges
 
 🔮 <b>Outlook</b>
-→ Future expectations"""
+→ Future expectations
+
+⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
     response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
 

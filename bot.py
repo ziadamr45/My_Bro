@@ -43,7 +43,8 @@ from formatters import (
     language_selection, time_selection, sources_selection,
     subscription_prompt, subscription_confirmed, unsubscription_confirmed,
     daily_news_header, daily_news_footer, subscribe_command_message,
-    unsubscribe_command_message, subscribers_info, about_message
+    unsubscribe_command_message, subscribers_info, about_message,
+    clean_ai_response
 )
 from news_fetcher import fetch_news
 from filters import filter_news, is_ai_related
@@ -691,6 +692,7 @@ async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress.update_stage(1)
         await progress.update_stage(2)
         report = await generate_company_report(company_name, lang)
+        report = clean_ai_response(report)
         await progress.update_stage(3)
         await progress.complete(final_message=report, delete_progress=False)
     except Exception as e:
@@ -723,6 +725,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress.update_stage(0)
         await progress.update_stage(1)
         response = await ask_question(question, lang)
+        response = clean_ai_response(response)
         await progress.update_stage(2)
         await progress.complete(final_message=response, delete_progress=False)
     except Exception as e:
@@ -757,6 +760,7 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress.update_stage(0)
         await progress.update_stage(1)
         explanation = await explain_topic(topic, lang)
+        explanation = clean_ai_response(explanation)
         await progress.update_stage(2)
 
         # حفظ تقدم التعلم
@@ -800,6 +804,7 @@ async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress.update_stage(0)
         await progress.update_stage(1)
         roadmap = await generate_roadmap(topic, lang)
+        roadmap = clean_ai_response(roadmap)
         await progress.update_stage(2)
         inline_keyboard = get_learn_inline_buttons(lang)
         await progress.complete(final_message=roadmap, reply_markup=inline_keyboard, delete_progress=False)
@@ -1117,6 +1122,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             report = await generate_company_report(company_key, lang)
+            report = clean_ai_response(report)
             await loading_msg.edit_text(report, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error in company callback: {e}")
@@ -1133,6 +1139,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             roadmap = await generate_roadmap(topic, lang)
+            roadmap = clean_ai_response(roadmap)
             inline_keyboard = get_learn_inline_buttons(lang)
             await loading_msg.edit_text(roadmap, parse_mode="HTML", reply_markup=inline_keyboard)
         except Exception as e:
@@ -1444,6 +1451,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.debug(f"Memory save error (non-critical): {e}")
 
         response = await smart_chat(user_text, lang, user_id=user_id)
+        # تنظيف رد AI من Markdown
+        response = clean_ai_response(response)
         await progress.update_stage(2)
 
         # حفظ رد البوت
