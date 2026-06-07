@@ -93,7 +93,7 @@ def parse_entry(entry, feed_url: str) -> Optional[Dict]:
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
         except Exception:
             pass
-    elif hasattr(entry, "updated_parsed') and entry.updated_parsed"):
+    elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
         try:
             published = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
         except Exception:

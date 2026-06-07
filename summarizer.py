@@ -6,14 +6,12 @@
 import logging
 from typing import List, Dict, Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, MAX_RETRIES, RETRY_DELAY
+from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_FALLBACK_MODELS, MAX_RETRIES, RETRY_DELAY
 
 logger = logging.getLogger(__name__)
-
-# تعيين الـ API Key
-genai.configure(api_key=GEMINI_API_KEY)
 
 
 def create_summary_prompt(articles: List[Dict]) -> str:
@@ -63,7 +61,7 @@ def parse_summaries(response_text: str, num_articles: int) -> List[str]:
             if summary:
                 summaries.append(summary)
 
-    # لو الصيغة المحددة ماشتغلتش، بنقسم بالأرقام
+    # لو الصيغة المحددة ماشتغلتش، بنقسم بالفقرات
     if len(summaries) != num_articles:
         summaries = []
         lines = response_text.strip().split("\n")
@@ -97,9 +95,30 @@ def parse_summaries(response_text: str, num_articles: int) -> List[str]:
     return summaries
 
 
+def _try_gemini_model(client: genai.Client, model: str, prompt: str) -> Optional[str]:
+    """
+    محاولة استدعاء موديل Gemini معين
+    """
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=2048,
+            )
+        )
+        if response and response.text:
+            return response.text
+    except Exception as e:
+        logger.warning(f"Model {model} failed: {str(e)[:150]}")
+    return None
+
+
 def summarize_articles(articles: List[Dict]) -> List[Dict]:
     """
-    تلخيص قائمة الأخبار باستخدام Gemini API
+    تلخيص قائمة الأخبار باستخدام Gemini API (google-genai package)
+    يجرب الموديل الرئيسي ثم الموديلات البديلة
     """
     if not articles:
         logger.warning("No articles to summarize")
@@ -114,20 +133,18 @@ def summarize_articles(articles: List[Dict]) -> List[Dict]:
     logger.info(f"Summarizing {len(articles)} articles using Gemini API...")
 
     prompt = create_summary_prompt(articles)
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # قائمة الموديلات للتجربة (الرئيسي + البدائل)
+    models_to_try = [GEMINI_MODEL] + GEMINI_FALLBACK_MODELS
 
     for attempt in range(MAX_RETRIES):
-        try:
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=2048,
-                )
-            )
+        for model in models_to_try:
+            logger.info(f"Trying model: {model} (attempt {attempt + 1})")
+            result = _try_gemini_model(client, model, prompt)
 
-            if response and response.text:
-                summaries = parse_summaries(response.text, len(articles))
+            if result:
+                summaries = parse_summaries(result, len(articles))
 
                 for i, article in enumerate(articles):
                     if i < len(summaries):
@@ -135,16 +152,13 @@ def summarize_articles(articles: List[Dict]) -> List[Dict]:
                     else:
                         article["arabic_summary"] = article.get("description", "")[:200]
 
-                logger.info(f"Successfully summarized {len(summaries)} articles")
+                logger.info(f"Successfully summarized {len(summaries)} articles using {model}")
                 return articles
-            else:
-                logger.warning(f"Gemini returned empty response (attempt {attempt + 1})")
 
-        except Exception as e:
-            logger.error(f"Gemini API error (attempt {attempt + 1}): {e}")
-
+        # انتظار قبل إعادة المحاولة
         if attempt < MAX_RETRIES - 1:
             import time
+            logger.info(f"Waiting {RETRY_DELAY}s before retry...")
             time.sleep(RETRY_DELAY)
 
     # في حالة فشل كل المحاولات، نستخدم الوصف الأصلي

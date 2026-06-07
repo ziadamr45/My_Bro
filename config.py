@@ -12,6 +12,7 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 # Gemini API Settings
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_FALLBACK_MODELS = ["gemini-2.0-flash-lite", "gemini-2.5-flash"]
 
 # News Settings
 MAX_NEWS_COUNT = 5
@@ -75,10 +76,10 @@ AI_KEYWORDS = [
 EXCLUSION_KEYWORDS = [
     "smartphone", "iphone", "android phone", "samsung galaxy",
     "crypto", "bitcoin", "ethereum", "nft", "blockchain",
-    "gaming", "game release", "esports",
-    "social media drama", "tiktok ban",
-    "electric vehicle", "ev car", "tesla stock",
-    "weather", "sports", "celebrity",
+    "game release", "esports",
+    "social media drama",
+    "electric vehicle", "ev car",
+    "weather", "celebrity",
 ]
 
 # RSS Feed URLs
@@ -96,7 +97,7 @@ RSS_FEEDS = [
 
 # Retry Settings
 MAX_RETRIES = 3
-RETRY_DELAY = 5  # seconds
+RETRY_DELAY = 30  # seconds (longer delay for API rate limits)
 
 # Request Timeout
 REQUEST_TIMEOUT = 30  # seconds
