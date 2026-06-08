@@ -1,6 +1,7 @@
 """
 بحث الويب - Web Search Module
 يستخدم DuckDuckGo (ddgs) للبحث مع تلخيص النتائج بالذكاء الاصطناعي
++ دعم Tavily API كبديل أفضل للبحث
 + دعم المكالمات غير المتزامنة
 + دعم البحث العميق (Deep Search) باستخدام نماذج أقوى
 + استخدام Provider Manager مع تبديل تلقائي
@@ -8,12 +9,72 @@
 
 import asyncio
 import logging
+import os
 from typing import List, Dict, Optional
 
 from config import REQUEST_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════
+# Tavily API (بحث حقيقي بأفضل جودة)
+# ═══════════════════════════════════════
+
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+
+
+def _search_tavily_sync(query: str, max_results: int = 5, search_depth: str = "basic") -> List[Dict]:
+    """بحث عبر Tavily API (أفضل جودة)"""
+    if not TAVILY_API_KEY:
+        return []
+
+    try:
+        import requests
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": TAVILY_API_KEY,
+            "query": query,
+            "max_results": max_results,
+            "search_depth": search_depth,
+            "include_answer": True,
+            "include_raw_content": False,
+        }
+
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        results = []
+        # Tavily بيرجع answer مباشر
+        if data.get("answer"):
+            results.append({
+                "title": "Tavily Answer",
+                "link": "",
+                "snippet": data["answer"],
+                "source": "Tavily AI",
+            })
+
+        # النتائج التفصيلية
+        for r in data.get("results", []):
+            results.append({
+                "title": r.get("title", ""),
+                "link": r.get("url", ""),
+                "snippet": r.get("content", ""),
+                "source": r.get("source", ""),
+            })
+
+        logger.info(f"Tavily search for '{query}': found {len(results)} results")
+        return results
+
+    except Exception as e:
+        logger.error(f"Tavily search error: {e}")
+        return []
+
+
+# ═══════════════════════════════════════
+# DuckDuckGo Search (fallback مجاني)
+# ═══════════════════════════════════════
 
 def _get_ddgs():
     """استيراد DDGS من الحزمة المناسبة"""
@@ -31,6 +92,13 @@ def _get_ddgs():
 
 def _search_web_sync(query: str, max_results: int = 5) -> List[Dict]:
     """البحث في الويب (متزامن) مع retry logic"""
+    # محاولة Tavily أولاً (أفضل جودة)
+    if TAVILY_API_KEY:
+        tavily_results = _search_tavily_sync(query, max_results)
+        if tavily_results:
+            return tavily_results
+
+    # Fallback لـ DuckDuckGo
     DDGS = _get_ddgs()
     if DDGS is None:
         return []
@@ -50,7 +118,7 @@ def _search_web_sync(query: str, max_results: int = 5) -> List[Dict]:
                     })
 
             logger.info(f"DuckDuckGo search for '{query}': found {len(results)} results")
-            
+
             # لو النتائج قليلة، نجرب بحث أوسع
             if len(results) < 2 and attempt == 0:
                 # تبسيط الاستعلام
@@ -74,7 +142,7 @@ def _search_web_sync(query: str, max_results: int = 5) -> List[Dict]:
                             seen_links.add(r['link'])
                             unique_results.append(r)
                     results = unique_results[:max_results]
-            
+
             return results
 
         except Exception as e:
@@ -97,6 +165,37 @@ async def search_web(query: str, max_results: int = 5) -> List[Dict]:
 
 def _search_news_sync(query: str, max_results: int = 5) -> List[Dict]:
     """البحث عن أخبار (متزامن) مع retry logic"""
+    # محاولة Tavily للأخبار
+    if TAVILY_API_KEY:
+        try:
+            import requests
+            url = "https://api.tavily.com/search"
+            payload = {
+                "api_key": TAVILY_API_KEY,
+                "query": f"{query} latest news",
+                "max_results": max_results,
+                "search_depth": "basic",
+                "topic": "news",
+            }
+            response = requests.post(url, json=payload, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                results = []
+                for r in data.get("results", []):
+                    results.append({
+                        "title": r.get("title", ""),
+                        "link": r.get("url", ""),
+                        "snippet": r.get("content", ""),
+                        "source": r.get("source", ""),
+                        "date": r.get("published_date", ""),
+                    })
+                if results:
+                    logger.info(f"Tavily news search for '{query}': found {len(results)} results")
+                    return results
+        except Exception as e:
+            logger.error(f"Tavily news search error: {e}")
+
+    # Fallback لـ DuckDuckGo
     DDGS = _get_ddgs()
     if DDGS is None:
         return []
@@ -182,41 +281,47 @@ Question: {query}
         search_text += f"العنوان: {r['title']}\n"
         search_text += f"المقتطف: {r['snippet']}\n"
         search_text += f"الرابط: {r['link']}\n"
+        if r.get('source'):
+            search_text += f"المصدر: {r['source']}\n"
 
     if language == "ar":
-        prompt = f"""بناءً على نتائج البحث التالية، أجب على سؤال المستخدم بالعربية الفصحى.
+        prompt = f"""بناءً على نتائج البحث التالية، أجب على سؤال المستخدم بالعربية الفصحى بطريقة مفيدة وشاملة.
 أضف الروابط المفيدة في إجابتك باستخدام تنسيق HTML.
 
 سؤال المستخدم: {query}
 
 نتائج البحث:{search_text}
 
-التنسيق المطلوب:
-- إجابة واضحة ومفيدة
+المطلوب:
+- إجابة واضحة ومفيدة وشاملة
+- تنظيم المعلومات بوضوح
+- ذكر المصادر والروابط
 - استخدم إيموجي مناسبة
-- أضف الروابط المفيدة: 🔗 <a href="الرابط">عنوان الرابط</a>
-- كن مختصراً لكن شاملاً
+- الروابط: 🔗 <a href="الرابط">عنوان الرابط</a>
+- كن مفصلاً ومفيداً
 
 ⚠️ ماتستخدمش Markdown أبداً (لا *, **, #, |, ---). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
-        system = "أنت مساعد ذكي يجيب بالعربية الفصحى بناءً على نتائج بحث حقيقية. استخدم إيموجي وتنسيق HTML جميل. ماتستخدمش Markdown أبداً."
+        system = "أنت مساعد ذكي يجيب بالعربية الفصحى بناءً على نتائج بحث حقيقية. استخدم إيموجي وتنسيق HTML جميل. كن مفصلاً ومفيداً. ماتستخدمش Markdown أبداً."
     else:
-        prompt = f"""Based on the following search results, answer the user's question in English.
+        prompt = f"""Based on the following search results, answer the user's question in English comprehensively.
 Include useful links in your answer using HTML format.
 
 User's question: {query}
 
 Search results:{search_text}
 
-Format requirements:
-- Clear and helpful answer
+Requirements:
+- Clear, helpful, and comprehensive answer
+- Well-organized information
+- Cite sources and links
 - Use appropriate emojis
-- Include useful links: 🔗 <a href="link">Link title</a>
-- Be concise but comprehensive
+- Links: 🔗 <a href="link">Link title</a>
+- Be detailed and helpful
 
 ⚠️ NEVER use Markdown (no *, **, #, |, ---). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
-        system = "You are a smart assistant answering based on real search results. Use emojis and nice HTML formatting. NEVER use Markdown."
+        system = "You are a smart assistant answering based on real search results. Use emojis and nice HTML formatting. Be detailed and helpful. NEVER use Markdown."
 
-    response = call_ai_sync(prompt, system_prompt=system, task_type="chat", temperature=0.5, max_tokens=1500)
+    response = call_ai_sync(prompt, system_prompt=system, task_type="chat", temperature=0.5, max_tokens=2000)
     from formatters import clean_ai_response
     if response:
         response = clean_ai_response(response)
@@ -244,16 +349,23 @@ def search_and_summarize(query: str, language: str = "ar") -> str:
 def _deep_search_and_summarize_sync(query: str, language: str = "ar") -> str:
     """
     البحث العميق - يستخدم نماذج أقوى وبحث أشمل
-    يجمع نتائج من بحث الويب + بحث الأخبار
+    يجمع نتائج من بحث الويب + بحث الأخبار + Tavily
     ثم يلخص بنموذج Deep Search مخصص
     """
     from provider_manager import call_ai_sync
 
-    # 1. بحث متعدد المصادر
+    # 1. بحث متعدد المصادر بالتوازي
     web_results = _search_web_sync(query, max_results=8)
     news_results = _search_news_sync(query, max_results=5)
 
-    if not web_results and not news_results:
+    # محاولة Tavily بحث عميق
+    tavily_deep_results = []
+    if TAVILY_API_KEY:
+        tavily_deep_results = _search_tavily_sync(query, max_results=5, search_depth="advanced")
+
+    all_results_count = len(web_results) + len(news_results) + len(tavily_deep_results)
+
+    if all_results_count == 0:
         # لو مفيش نتائج، نحاول بالإجابة المباشرة
         if language == "ar":
             prompt = f"""أجب على السؤال التالي بأفضل ما تعرفه بشكل مفصل وشامل.
@@ -278,6 +390,19 @@ Question: {query}
 
     # 2. تجميع كل النتائج
     search_text = ""
+
+    # دمج Tavily deep results
+    if tavily_deep_results:
+        search_text += "\n🔬 نتائج Tavily المتقدمة:\n" if language == "ar" else "\n🔬 Tavily Advanced Results:\n"
+        for i, r in enumerate(tavily_deep_results, 1):
+            search_text += f"\n--- نتيجة متقدمة {i} ---\n"
+            search_text += f"العنوان: {r['title']}\n"
+            search_text += f"المحتوى: {r['snippet']}\n"
+            if r.get('link'):
+                search_text += f"الرابط: {r['link']}\n"
+            if r.get('source'):
+                search_text += f"المصدر: {r['source']}\n"
+
     if web_results:
         search_text += "\n🌐 نتائج بحث الويب:\n" if language == "ar" else "\n🌐 Web Search Results:\n"
         for i, r in enumerate(web_results, 1):
@@ -303,46 +428,52 @@ Question: {query}
         prompt = f"""🔬 <b>بحث عميق</b>
 
 بناءً على نتائج البحث الشاملة التالية، قدّم إجابة مفصلة ومنظمة بالعربية الفصحى.
+المعلومات دي من بحث حقيقي في الويب — استخدمها كلها واختار الأهم.
 
 سؤال المستخدم: {query}
 
 نتائج البحث الشاملة:{search_text}
 
 المطلوب:
-- إجابة شاملة ومفصلة
-- تنظيم المعلومات بوضوح
-- ذكر المصادر والروابط
+- إجابة شاملة ومفصلة جداً — مش مختصرة
+- تنظيم المعلومات بوضوح في أقسام
+- ذكر المصادر والروابط الحقيقية
 - مقارنة بين الآراء إن وُجدت
 - استنتاجات وتوقعات إن أمكن
 - الروابط: 🔗 <a href="الرابط">عنوان الرابط</a>
+- خليك مفيد ومفصل
 
 ⚠️ ماتستخدمش Markdown أبداً (لا *, **, #, |, ---). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
         system = """أنت باحث متخصص في البحث العميق. تجيب بالعربية الفصحى بشكل شامل ومفصل.
 تنظم المعلومات بشكل واضح مع ذكر المصادر.
-ماتستخدمش Markdown أبداً. استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط."""
+ماتستخدمش Markdown أبداً. استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط.
+كن مفصلاً ومفيداً — مش مختصر."""
     else:
         prompt = f"""🔬 <b>Deep Search</b>
 
 Based on the following comprehensive search results, provide a detailed and organized answer in English.
+This information is from real web search — use all of it and highlight the most important.
 
 User's question: {query}
 
 Comprehensive search results:{search_text}
 
 Requirements:
-- Comprehensive and detailed answer
-- Well-organized information
-- Cite sources and links
+- Comprehensive and very detailed answer — not brief
+- Well-organized information in sections
+- Cite real sources and links
 - Compare different viewpoints if available
 - Include conclusions and predictions if possible
 - Links: 🔗 <a href="link">Link title</a>
+- Be detailed and helpful
 
 ⚠️ NEVER use Markdown (no *, **, #, |, ---). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
         system = """You are a researcher specialized in deep search. Answer comprehensively and in detail.
 Organize information clearly with source citations.
-NEVER use Markdown. Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets."""
+NEVER use Markdown. Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets.
+Be detailed and helpful — not brief."""
 
-    response = call_ai_sync(prompt, system_prompt=system, task_type="deep_search", temperature=0.4, max_tokens=3000)
+    response = call_ai_sync(prompt, system_prompt=system, task_type="deep_search", temperature=0.4, max_tokens=4000)
     from formatters import clean_ai_response
     if response:
         response = clean_ai_response(response)

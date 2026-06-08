@@ -81,6 +81,16 @@ def SEARCH_STAGES(lang: str = "ar") -> List[Stage]:
         Stage("📝", "تجهيز الرد", "Preparing response"),
     ]
 
+def DEEP_SEARCH_STAGES(lang: str = "ar") -> List[Stage]:
+    """مراحل البحث العميق"""
+    return [
+        Stage("🔍", "البحث في الويب", "Searching web"),
+        Stage("📰", "البحث في الأخبار", "Searching news"),
+        Stage("🔬", "البحث المتقدم", "Advanced search"),
+        Stage("📊", "فهرسة وتحليل النتائج", "Indexing & analyzing"),
+        Stage("📝", "كتابة التقرير الشامل", "Writing comprehensive report"),
+    ]
+
 def COMPANY_STAGES(lang: str = "ar") -> List[Stage]:
     """مراحل تقرير الشركة"""
     return [

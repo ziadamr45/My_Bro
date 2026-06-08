@@ -13,6 +13,9 @@ import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
+# PostgreSQL (Neon) - قاعدة بيانات دائمة
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
 # ═══════════════════════════════════════
 # مزودين AI - AI Providers
 # ═══════════════════════════════════════
@@ -301,7 +304,7 @@ ROADMAPS = {
 # ═══════════════════════════════════════
 
 BOT_NAME = "My Bro"
-BOT_VERSION = "7.5"
+BOT_VERSION = "8.0"
 
 # ═══════════════════════════════════════
 # معلومات المؤسس - Creator Info

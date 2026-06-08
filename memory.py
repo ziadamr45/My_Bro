@@ -1,6 +1,7 @@
 """
 نظام الذاكرة المتقدم - Advanced Memory System
-يستخدم SQLite لتخزين دائم يتجاوز إعادة تشغيل البوت
+يستخدم PostgreSQL (Neon) لتخزين دائم يتجاوز إعادة تشغيل البوت
+مع fallback لـ SQLite لو PostgreSQL مش متاح
 
 يشمل:
 - ملف المستخدم (اسم، لغة، اهتمامات، شركات مفضلة)
@@ -15,7 +16,6 @@
 import json
 import os
 import logging
-import sqlite3
 import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -30,22 +30,153 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════
 
 _local = threading.local()
+_db_type = None  # "postgresql" or "sqlite"
 
 
-def _get_db() -> sqlite3.Connection:
-    """الحصول على اتصال قاعدة البيانات (thread-local)"""
-    if not hasattr(_local, 'connection') or _local.connection is None:
+def _get_database_url():
+    """الحصول على رابط PostgreSQL من البيئة"""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        # محاولة من إعدادات config
+        try:
+            from config import DATABASE_URL as CONFIG_DB_URL
+            url = CONFIG_DB_URL
+        except (ImportError, AttributeError):
+            pass
+    return url
+
+
+def _init_postgresql():
+    """تهيئة قاعدة بيانات PostgreSQL"""
+    global _db_type
+    url = _get_database_url()
+    if not url:
+        return False
+
+    try:
+        import psycopg2
+        # التعامل مع SSL في Neon
+        if "sslmode=" not in url and "neon.tech" in url:
+            url += "&sslmode=require" if "?" in url else "?sslmode=require"
+
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        _local.pg_conn = conn
+        _db_type = "postgresql"
+
+        # إنشاء الجداول
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id BIGINT PRIMARY KEY,
+                name TEXT DEFAULT '',
+                language TEXT DEFAULT 'ar',
+                news_time TEXT DEFAULT '09:00',
+                sources TEXT DEFAULT '[]',
+                subscribed INTEGER DEFAULT 0,
+                response_length TEXT DEFAULT 'medium',
+                notification_enabled INTEGER DEFAULT 1,
+                interests TEXT DEFAULT '[]',
+                favorite_companies TEXT DEFAULT '[]',
+                created_at TEXT,
+                last_interaction TEXT,
+                commands_used INTEGER DEFAULT 0,
+                chat_count INTEGER DEFAULT 0
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS learning_progress (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                topic TEXT NOT NULL,
+                level TEXT DEFAULT 'explored',
+                learned_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+                UNIQUE(user_id, topic),
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT DEFAULT '',
+                url TEXT DEFAULT '',
+                saved_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_memories (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                category TEXT DEFAULT 'general',
+                created_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+                UNIQUE(user_id, key),
+                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+            );
+        """)
+        # إنشاء فهارس
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, timestamp DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_user ON learning_progress(user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, category);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id, category);")
+        cur.close()
+
+        logger.info("✅ PostgreSQL database initialized successfully (Neon)")
+        return True
+
+    except Exception as e:
+        logger.warning(f"⚠️ PostgreSQL init failed: {e}. Falling back to SQLite.")
+        _db_type = None
+        return False
+
+
+def _get_pg_conn():
+    """الحصول على اتصال PostgreSQL (thread-local مع إعادة الاتصال)"""
+    if not hasattr(_local, 'pg_conn') or _local.pg_conn is None or _local.pg_conn.closed:
+        url = _get_database_url()
+        if not url:
+            return None
+        try:
+            import psycopg2
+            if "sslmode=" not in url and "neon.tech" in url:
+                url += "&sslmode=require" if "?" in url else "?sslmode=require"
+            conn = psycopg2.connect(url)
+            conn.autocommit = True
+            _local.pg_conn = conn
+            return conn
+        except Exception as e:
+            logger.error(f"PostgreSQL reconnection failed: {e}")
+            return None
+    return _local.pg_conn
+
+
+def _init_sqlite():
+    """تهيئة قاعدة بيانات SQLite كـ fallback"""
+    global _db_type
+    import sqlite3
+    if not hasattr(_local, 'sqlite_conn') or _local.sqlite_conn is None:
         os.makedirs(DATA_DIR, exist_ok=True)
-        _local.connection = sqlite3.connect(DATABASE_PATH, timeout=10)
-        _local.connection.row_factory = sqlite3.Row
-        _local.connection.execute("PRAGMA journal_mode=WAL")
-        _local.connection.execute("PRAGMA foreign_keys=ON")
-    return _local.connection
+        _local.sqlite_conn = sqlite3.connect(DATABASE_PATH, timeout=10)
+        _local.sqlite_conn.row_factory = sqlite3.Row
+        _local.sqlite_conn.execute("PRAGMA journal_mode=WAL")
+        _local.sqlite_conn.execute("PRAGMA foreign_keys=ON")
 
-
-def init_database():
-    """إنشاء جداول قاعدة البيانات لو مش موجودة"""
-    db = _get_db()
+    db = _local.sqlite_conn
     db.executescript("""
         CREATE TABLE IF NOT EXISTS user_profiles (
             user_id INTEGER PRIMARY KEY,
@@ -111,7 +242,89 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id, category);
     """)
     db.commit()
-    logger.info("Database initialized successfully")
+    _db_type = "sqlite"
+    logger.info("✅ SQLite database initialized successfully (fallback)")
+    return db
+
+
+def init_database():
+    """إنشاء جداول قاعدة البيانات"""
+    # محاولة PostgreSQL أولاً
+    if not _init_postgresql():
+        # Fallback لـ SQLite
+        _init_sqlite()
+
+
+def _get_db():
+    """الحصول على اتصال قاعدة البيانات"""
+    if _db_type == "postgresql":
+        conn = _get_pg_conn()
+        if conn:
+            return conn
+        # Fallback
+        return _init_sqlite()
+    else:
+        return _init_sqlite()
+
+
+def _is_postgres():
+    """هل نستخدم PostgreSQL؟"""
+    return _db_type == "postgresql"
+
+
+def _execute(query, params=(), fetch=False, fetchone=False):
+    """تنفيذ استعلام مع دعم PostgreSQL و SQLite"""
+    db = _get_db()
+
+    if _is_postgres():
+        try:
+            cur = db.cursor()
+            cur.execute(query, params)
+            if fetchone:
+                result = cur.fetchone()
+                cur.close()
+                return result
+            elif fetch:
+                result = cur.fetchall()
+                cur.close()
+                return result
+            else:
+                db.commit()
+                cur.close()
+                return None
+        except Exception as e:
+            logger.error(f"PostgreSQL execute error: {e}")
+            # محاولة إعادة الاتصال
+            try:
+                db = _get_pg_conn()
+                if db:
+                    cur = db.cursor()
+                    cur.execute(query, params)
+                    if fetchone:
+                        result = cur.fetchone()
+                        cur.close()
+                        return result
+                    elif fetch:
+                        result = cur.fetchall()
+                        cur.close()
+                        return result
+                    else:
+                        db.commit()
+                        cur.close()
+                        return None
+            except Exception as e2:
+                logger.error(f"PostgreSQL retry failed: {e2}")
+                return None
+    else:
+        # SQLite
+        if fetchone:
+            return db.execute(query, params).fetchone()
+        elif fetch:
+            return db.execute(query, params).fetchall()
+        else:
+            db.execute(query, params)
+            db.commit()
+            return None
 
 
 # ═══════════════════════════════════════
@@ -144,18 +357,20 @@ def _save_all_users(data: Dict):
 
 def _ensure_user_in_db(user_id: int):
     """التأكد إن المستخدم موجود في قاعدة البيانات"""
-    db = _get_db()
-    row = db.execute("SELECT user_id FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+    row = _execute("SELECT user_id FROM user_profiles WHERE user_id = %s" if _is_postgres() else "SELECT user_id FROM user_profiles WHERE user_id = ?", (user_id,), fetchone=True)
     if not row:
         now = datetime.now().isoformat()
-        db.execute(
+        _execute(
+            """INSERT INTO user_profiles
+            (user_id, name, language, news_time, sources, subscribed, interests,
+             favorite_companies, created_at, last_interaction, commands_used, chat_count)
+            VALUES (%s, %s, 'ar', '09:00', '[]', 0, '[]', '[]', %s, %s, 0, 0)""" if _is_postgres() else
             """INSERT OR IGNORE INTO user_profiles
             (user_id, name, language, news_time, sources, subscribed, interests,
              favorite_companies, created_at, last_interaction, commands_used, chat_count)
             VALUES (?, ?, 'ar', '09:00', '[]', 0, '[]', '[]', ?, ?, 0, 0)""",
             (user_id, '', now, now)
         )
-        db.commit()
 
 
 # ═══════════════════════════════════════
@@ -164,10 +379,26 @@ def _ensure_user_in_db(user_id: int):
 
 def get_user(user_id: int) -> Dict:
     _ensure_user_in_db(user_id)
-    db = _get_db()
-    row = db.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)).fetchone()
+    ph = "%s" if _is_postgres() else "?"
+    row = _execute(f"SELECT * FROM user_profiles WHERE user_id = {ph}", (user_id,), fetchone=True)
     if row:
-        data = dict(row)
+        if _is_postgres():
+            import psycopg2.extras
+            # row might be a tuple from psycopg2, need to get column names
+            if hasattr(row, '_fields') or isinstance(row, tuple):
+                cur = _get_pg_conn().cursor()
+                cur.execute(f"SELECT * FROM user_profiles WHERE user_id = %s", (user_id,))
+                row = cur.fetchone()
+                if row:
+                    colnames = [desc[0] for desc in cur.description]
+                    data = dict(zip(colnames, row))
+                else:
+                    data = {}
+                cur.close()
+            else:
+                data = dict(row)
+        else:
+            data = dict(row)
         # تحويل JSON strings إلى lists
         for key in ['sources', 'interests', 'favorite_companies']:
             if isinstance(data.get(key), str):
@@ -198,7 +429,6 @@ def get_user(user_id: int) -> Dict:
 
 def update_user(user_id: int, updates: Dict[str, Any]):
     _ensure_user_in_db(user_id)
-    db = _get_db()
 
     # تحويل lists إلى JSON strings
     for key in ['sources', 'interests', 'favorite_companies']:
@@ -210,12 +440,12 @@ def update_user(user_id: int, updates: Dict[str, Any]):
 
     updates['last_interaction'] = datetime.now().isoformat()
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    ph = "%s" if _is_postgres() else "?"
+    set_clause = ", ".join(f"{k} = {ph}" for k in updates.keys())
     values = list(updates.values()) + [user_id]
-    db.execute(f"UPDATE user_profiles SET {set_clause} WHERE user_id = ?", values)
-    db.commit()
+    _execute(f"UPDATE user_profiles SET {set_clause} WHERE user_id = {ph}", values)
 
-    # sync مع JSON القديم
+    # sync مع JSON القديم (للتوافق)
     try:
         all_users = _load_all_users()
         uid = str(user_id)
@@ -277,11 +507,14 @@ def is_subscribed(user_id: int) -> bool:
     return user.get("subscribed", False)
 
 def get_all_subscribers() -> List[Dict]:
-    db = _get_db()
-    rows = db.execute(
-        "SELECT user_id, language, news_time, name FROM user_profiles WHERE subscribed = 1"
-    ).fetchall()
+    ph = "%s" if _is_postgres() else "?"
+    rows = _execute(f"SELECT user_id, language, news_time, name FROM user_profiles WHERE subscribed = {ph}", (1,), fetch=True)
     if rows:
+        if _is_postgres():
+            result = []
+            for row in rows:
+                result.append({"user_id": row[0], "language": row[1], "news_time": row[2], "name": row[3]})
+            return result
         return [dict(r) for r in rows]
     # fallback
     all_users = _load_all_users()
@@ -298,22 +531,20 @@ def get_subscriber_count() -> int:
     return len(get_all_subscribers())
 
 def increment_command_count(user_id: int):
-    db = _get_db()
     _ensure_user_in_db(user_id)
-    db.execute(
-        "UPDATE user_profiles SET commands_used = commands_used + 1, last_interaction = ? WHERE user_id = ?",
+    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+    _execute(
+        f"UPDATE user_profiles SET commands_used = commands_used + 1, last_interaction = {ph1} WHERE user_id = {ph2}",
         (datetime.now().isoformat(), user_id)
     )
-    db.commit()
 
 def increment_chat_count(user_id: int):
-    db = _get_db()
     _ensure_user_in_db(user_id)
-    db.execute(
-        "UPDATE user_profiles SET chat_count = chat_count + 1, last_interaction = ? WHERE user_id = ?",
+    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+    _execute(
+        f"UPDATE user_profiles SET chat_count = chat_count + 1, last_interaction = {ph1} WHERE user_id = {ph2}",
         (datetime.now().isoformat(), user_id)
     )
-    db.commit()
 
 
 # ═══════════════════════════════════════
@@ -325,31 +556,44 @@ MAX_CONVERSATIONS = 50
 def save_conversation(user_id: int, role: str, content: str):
     """حفظ رسالة في ذاكرة المحادثات"""
     _ensure_user_in_db(user_id)
-    db = _get_db()
-    # حفظ الرسالة
-    db.execute(
-        "INSERT INTO conversations (user_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+    ph1, ph2, ph3, ph4 = ("%s", "%s", "%s", "%s") if _is_postgres() else ("?", "?", "?", "?")
+    _execute(
+        f"INSERT INTO conversations (user_id, role, content, timestamp) VALUES ({ph1}, {ph2}, {ph3}, {ph4})",
         (user_id, role, content[:1000], datetime.now().isoformat())
     )
     # حذف القديم لو عدى الحد
-    db.execute(
-        """DELETE FROM conversations WHERE id IN (
-            SELECT id FROM conversations WHERE user_id = ?
-            ORDER BY timestamp DESC LIMIT -1 OFFSET ?
-        )""",
-        (user_id, MAX_CONVERSATIONS)
-    )
-    db.commit()
+    ph_u, ph_l = ("%s", "%s") if _is_postgres() else ("?", "?")
+    if _is_postgres():
+        _execute(
+            """DELETE FROM conversations WHERE id IN (
+                SELECT id FROM conversations WHERE user_id = %s
+                ORDER BY timestamp DESC OFFSET %s
+            )""",
+            (user_id, MAX_CONVERSATIONS)
+        )
+    else:
+        _execute(
+            """DELETE FROM conversations WHERE id IN (
+                SELECT id FROM conversations WHERE user_id = ?
+                ORDER BY timestamp DESC LIMIT -1 OFFSET ?
+            )""",
+            (user_id, MAX_CONVERSATIONS)
+        )
 
 
 def get_recent_conversations(user_id: int, limit: int = 10) -> List[Dict]:
     """الحصول على آخر محادثات المستخدم"""
-    db = _get_db()
-    rows = db.execute(
-        "SELECT role, content, timestamp FROM conversations WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
-        (user_id, limit)
-    ).fetchall()
-    return [dict(r) for r in rows]
+    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+    rows = _execute(
+        f"SELECT role, content, timestamp FROM conversations WHERE user_id = {ph1} ORDER BY timestamp DESC LIMIT {ph2}",
+        (user_id, limit),
+        fetch=True
+    )
+    if rows:
+        if _is_postgres():
+            return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in rows]
+        return [dict(r) for r in rows]
+    return []
 
 
 def get_conversation_context(user_id: int, limit: int = 6) -> str:
@@ -371,24 +615,36 @@ def get_conversation_context(user_id: int, limit: int = 6) -> str:
 def save_learning(user_id: int, topic: str, level: str = "explored"):
     """حفظ تقدم التعلم"""
     _ensure_user_in_db(user_id)
-    db = _get_db()
-    db.execute(
-        """INSERT INTO learning_progress (user_id, topic, level, learned_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(user_id, topic) DO UPDATE SET level = ?, learned_at = ?""",
-        (user_id, topic, level, datetime.now().isoformat(), level, datetime.now().isoformat())
-    )
-    db.commit()
+    now = datetime.now().isoformat()
+    if _is_postgres():
+        _execute(
+            """INSERT INTO learning_progress (user_id, topic, level, learned_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT(user_id, topic) DO UPDATE SET level = %s, learned_at = %s""",
+            (user_id, topic, level, now, level, now)
+        )
+    else:
+        _execute(
+            """INSERT INTO learning_progress (user_id, topic, level, learned_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, topic) DO UPDATE SET level = ?, learned_at = ?""",
+            (user_id, topic, level, now, level, now)
+        )
 
 
 def get_learning_progress(user_id: int) -> List[Dict]:
     """الحصول على كل تقدم التعلم"""
-    db = _get_db()
-    rows = db.execute(
-        "SELECT topic, level, learned_at FROM learning_progress WHERE user_id = ? ORDER BY learned_at DESC",
-        (user_id,)
-    ).fetchall()
-    return [dict(r) for r in rows]
+    ph = "%s" if _is_postgres() else "?"
+    rows = _execute(
+        f"SELECT topic, level, learned_at FROM learning_progress WHERE user_id = {ph} ORDER BY learned_at DESC",
+        (user_id,),
+        fetch=True
+    )
+    if rows:
+        if _is_postgres():
+            return [{"topic": r[0], "level": r[1], "learned_at": r[2]} for r in rows]
+        return [dict(r) for r in rows]
+    return []
 
 
 def get_learned_topics(user_id: int) -> List[str]:
@@ -404,35 +660,40 @@ def get_learned_topics(user_id: int) -> List[str]:
 def add_favorite(user_id: int, category: str, title: str, content: str = "", url: str = ""):
     """إضافة عنصر للمفضلات"""
     _ensure_user_in_db(user_id)
-    db = _get_db()
-    db.execute(
-        "INSERT INTO favorites (user_id, category, title, content, url, saved_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ph1, ph2, ph3, ph4, ph5, ph6 = (["%s"] * 6) if _is_postgres() else (["?"] * 6)
+    _execute(
+        f"INSERT INTO favorites (user_id, category, title, content, url, saved_at) VALUES ({', '.join(ph1)})",
         (user_id, category, title, content[:500], url, datetime.now().isoformat())
     )
-    db.commit()
 
 
 def get_favorites(user_id: int, category: str = None) -> List[Dict]:
     """الحصول على المفضلات"""
-    db = _get_db()
     if category:
-        rows = db.execute(
-            "SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = ? AND category = ? ORDER BY saved_at DESC",
-            (user_id, category)
-        ).fetchall()
+        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+        rows = _execute(
+            f"SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = {ph1} AND category = {ph2} ORDER BY saved_at DESC",
+            (user_id, category),
+            fetch=True
+        )
     else:
-        rows = db.execute(
-            "SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = ? ORDER BY saved_at DESC",
-            (user_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
+        ph = "%s" if _is_postgres() else "?"
+        rows = _execute(
+            f"SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = {ph} ORDER BY saved_at DESC",
+            (user_id,),
+            fetch=True
+        )
+    if rows:
+        if _is_postgres():
+            return [{"id": r[0], "category": r[1], "title": r[2], "content": r[3], "url": r[4], "saved_at": r[5]} for r in rows]
+        return [dict(r) for r in rows]
+    return []
 
 
 def remove_favorite(user_id: int, favorite_id: int):
     """حذف عنصر من المفضلات"""
-    db = _get_db()
-    db.execute("DELETE FROM favorites WHERE id = ? AND user_id = ?", (favorite_id, user_id))
-    db.commit()
+    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+    _execute(f"DELETE FROM favorites WHERE id = {ph1} AND user_id = {ph2}", (favorite_id, user_id))
 
 
 # ═══════════════════════════════════════
@@ -442,50 +703,63 @@ def remove_favorite(user_id: int, favorite_id: int):
 def save_memory(user_id: int, key: str, value: str, category: str = "general"):
     """حفظ ذكرى في الذاكرة الذكية"""
     _ensure_user_in_db(user_id)
-    db = _get_db()
-    db.execute(
-        """INSERT INTO user_memories (user_id, key, value, category, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, key) DO UPDATE SET value = ?, category = ?""",
-        (user_id, key, value, category, datetime.now().isoformat(), value, category)
-    )
-    db.commit()
+    now = datetime.now().isoformat()
+    if _is_postgres():
+        _execute(
+            """INSERT INTO user_memories (user_id, key, value, category, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT(user_id, key) DO UPDATE SET value = %s, category = %s""",
+            (user_id, key, value, category, now, value, category)
+        )
+    else:
+        _execute(
+            """INSERT INTO user_memories (user_id, key, value, category, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, key) DO UPDATE SET value = ?, category = ?""",
+            (user_id, key, value, category, now, value, category)
+        )
 
 
 def get_memories(user_id: int, category: str = None) -> List[Dict]:
     """الحصول على الذكريات"""
-    db = _get_db()
     if category:
-        rows = db.execute(
-            "SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
-            (user_id, category)
-        ).fetchall()
+        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+        rows = _execute(
+            f"SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = {ph1} AND category = {ph2} ORDER BY created_at DESC",
+            (user_id, category),
+            fetch=True
+        )
     else:
-        rows = db.execute(
-            "SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = ? ORDER BY created_at DESC",
-            (user_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
+        ph = "%s" if _is_postgres() else "?"
+        rows = _execute(
+            f"SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = {ph} ORDER BY created_at DESC",
+            (user_id,),
+            fetch=True
+        )
+    if rows:
+        if _is_postgres():
+            return [{"id": r[0], "key": r[1], "value": r[2], "category": r[3], "created_at": r[4]} for r in rows]
+        return [dict(r) for r in rows]
+    return []
 
 
 def delete_memory(user_id: int, key: str = None, memory_id: int = None):
     """حذف ذكرى محددة"""
-    db = _get_db()
     if memory_id:
-        db.execute("DELETE FROM user_memories WHERE id = ? AND user_id = ?", (memory_id, user_id))
+        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+        _execute(f"DELETE FROM user_memories WHERE id = {ph1} AND user_id = {ph2}", (memory_id, user_id))
     elif key:
-        db.execute("DELETE FROM user_memories WHERE key LIKE ? AND user_id = ?", (f"%{key}%", user_id))
-    db.commit()
+        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+        _execute(f"DELETE FROM user_memories WHERE key LIKE {ph1} AND user_id = {ph2}", (f"%{key}%", user_id))
 
 
 def reset_all_memories(user_id: int):
     """حذف كل الذكريات"""
-    db = _get_db()
-    db.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
-    db.execute("DELETE FROM learning_progress WHERE user_id = ?", (user_id,))
-    db.execute("DELETE FROM favorites WHERE user_id = ?", (user_id,))
-    db.execute("DELETE FROM user_memories WHERE user_id = ?", (user_id,))
-    db.commit()
+    ph = "%s" if _is_postgres() else "?"
+    _execute(f"DELETE FROM conversations WHERE user_id = {ph}", (user_id,))
+    _execute(f"DELETE FROM learning_progress WHERE user_id = {ph}", (user_id,))
+    _execute(f"DELETE FROM favorites WHERE user_id = {ph}", (user_id,))
+    _execute(f"DELETE FROM user_memories WHERE user_id = {ph}", (user_id,))
 
 
 # ═══════════════════════════════════════
@@ -976,6 +1250,21 @@ def get_recommended_topic(user_id: int, lang: str = "ar") -> str:
                 return f"💡 You could learn about {interest}! Try <code>/learn {interest}</code>"
 
     return ""
+
+
+def is_new_user(user_id: int) -> bool:
+    """هل ده مستخدم جديد (أول مرة يتعامل مع البوت)؟"""
+    ph = "%s" if _is_postgres() else "?"
+    row = _execute(f"SELECT created_at, chat_count, commands_used FROM user_profiles WHERE user_id = {ph}", (user_id,), fetchone=True)
+    if not row:
+        return True
+    if _is_postgres():
+        chat_count = row[1] if len(row) > 1 else 0
+        commands_used = row[2] if len(row) > 2 else 0
+    else:
+        chat_count = dict(row).get('chat_count', 0)
+        commands_used = dict(row).get('commands_used', 0)
+    return chat_count == 0 and commands_used == 0
 
 
 # ═══════════════════════════════════════

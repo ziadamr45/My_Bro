@@ -52,7 +52,7 @@ from scorer import rank_articles
 from summarizer import summarize_articles
 from progress import (
     ProgressManager, TypingIndicator, send_typing,
-    NEWS_STAGES, AI_STAGES, SEARCH_STAGES, COMPANY_STAGES,
+    NEWS_STAGES, AI_STAGES, SEARCH_STAGES, DEEP_SEARCH_STAGES, COMPANY_STAGES,
     LEARN_STAGES, ROADMAP_STAGES
 )
 
@@ -245,31 +245,55 @@ def get_roadmap_keyboard(language: str = "ar") -> InlineKeyboardMarkup:
 # ═══════════════════════════════════════
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /start - شاشة ترحيب احترافية"""
+    """أمر /start - شاشة ترحيب احترافية مع تفرقة بين جديد وقديم"""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or "صديقي"
     lang = get_language(user_id)
     increment_command_count(user_id)
 
-    from memory import update_user
+    from memory import update_user, is_new_user
     update_user(user_id, {"name": user_name})
 
     keyboard = get_main_keyboard(lang)
 
-    await update.message.reply_text(
-        welcome_message(lang, user_name),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=keyboard
-    )
+    # تفرقة بين مستخدم جديد ومستخدم قديم
+    new_user = is_new_user(user_id)
 
-    if not is_subscribed(user_id):
-        await asyncio.sleep(1.5)
-        sub_keyboard = get_subscribe_keyboard(lang)
+    if new_user:
+        # مستخدم جديد - رسالة ترحيب كاملة + اشتراك
         await update.message.reply_text(
-            subscription_prompt(lang),
+            welcome_message(lang, user_name),
             parse_mode="HTML",
-            reply_markup=sub_keyboard
+            disable_web_page_preview=True,
+            reply_markup=keyboard
+        )
+
+        # عرض اشتراك للمستخدم الجديد فقط
+        if not is_subscribed(user_id):
+            await asyncio.sleep(1.5)
+            sub_keyboard = get_subscribe_keyboard(lang)
+            await update.message.reply_text(
+                subscription_prompt(lang),
+                parse_mode="HTML",
+                reply_markup=sub_keyboard
+            )
+    else:
+        # مستخدم قديم - رسالة ترحيب مختصرة ودافئة
+        subscribed = is_subscribed(user_id)
+        if lang == "ar":
+            msg = f"أهلاً تاني يا {user_name}! 👋\n\nأنا فاكرك طبعاً — اختار اللي عايزه من الأزرار أو اكتبلي أي حاجة! 🤖"
+            if not subscribed:
+                msg += "\n\n💡 <i>ممكن تشترك في الأخبار اليومية من ⚙️ الإعدادات</i>"
+        else:
+            msg = f"Welcome back {user_name}! 👋\n\nI remember you — choose from the buttons or just type anything! 🤖"
+            if not subscribed:
+                msg += "\n\n💡 <i>You can subscribe to daily news from ⚙️ Settings</i>"
+
+        await update.message.reply_text(
+            msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=keyboard
         )
 
 
@@ -1063,7 +1087,7 @@ async def deepsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(msg, parse_mode="HTML")
         return
 
-    stages = SEARCH_STAGES(lang)
+    stages = DEEP_SEARCH_STAGES(lang)
     title = f"بحث عميق: {query}" if lang == "ar" else f"Deep Search: {query}"
     progress = ProgressManager(update, context, stages, lang, title)
     await progress.start()
@@ -1071,10 +1095,12 @@ async def deepsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         await progress.update_stage(0)
         await progress.update_stage(1)
+        await progress.update_stage(2)
         from web_search import deep_search_and_summarize_async
         response = await deep_search_and_summarize_async(query, lang)
         response = clean_ai_response(response)
-        await progress.update_stage(2)
+        await progress.update_stage(3)
+        await progress.update_stage(4)
         await progress.complete(final_message=response, delete_progress=False)
     except Exception as e:
         logger.error(f"Error in /deepsearch: {e}")
