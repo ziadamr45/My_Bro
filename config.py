@@ -301,7 +301,7 @@ ROADMAPS = {
 # ═══════════════════════════════════════
 
 BOT_NAME = "My Bro"
-BOT_VERSION = "7.0"
+BOT_VERSION = "7.5"
 
 # ═══════════════════════════════════════
 # معلومات المؤسس - Creator Info
@@ -312,10 +312,12 @@ CREATOR_INFO = {
     "name_ar": "زياد عمرو",
     "title_en": "Egyptian Web Developer & AI Builder",
     "title_ar": "مطوّر ويب مصري وباني أدوات ذكاء اصطناعي",
-    "bio_en": "Full-stack web developer specializing in Next.js, React, TypeScript, and modern web technologies. Building AI-powered tools and bots. Founder of Qudra Tech. Passionate about making AI accessible to Arabic speakers.",
-    "bio_ar": "مطوّر ويب متكامل متخصص في Next.js و React و TypeScript وتقنيات الويب الحديثة. بيبني أدوات وبوتات بتقنية الذكاء الاصطناعي. مؤسس Qudra Tech. شغوف إنه يخلي الذكاء الاصطناعي متاح للناطقين بالعربية.",
+    "bio_en": "Full-stack web developer specializing in Next.js, React, TypeScript, and modern web technologies. Building AI-powered tools and bots that make artificial intelligence accessible to everyone, especially Arabic speakers. Founder and CEO of Qudra Tech — an Egyptian tech startup focused on innovative web solutions and AI applications. Passionate about bridging the gap between cutting-edge AI technology and the Arabic-speaking world.",
+    "bio_ar": "مطوّر ويب متكامل متخصص في Next.js و React و TypeScript وتقنيات الويب الحديثة. بيبني أدوات وبوتات بتقنية الذكاء الاصطناعي بتخلي التكنولوجيا متاحة للجميع، خصوصاً الناطقين بالعربية. مؤسس ومدير تنفيذي لشركة Qudra Tech — شركة تقنية مصرية ناشئة متخصصة في حلول الويب المبتكرة وتطبيقات الذكاء الاصطناعي. شغوف إنه يعمل كوبري بين أحدث تقنيات الذكاء الاصطناعي والعالم العربي.",
     "company_en": "Qudra Tech",
-    "company_ar": "Qudra Tech",
+    "company_ar": "Qudra Tech — قدرة تك",
+    "company_desc_en": "An Egyptian tech startup specializing in web development, AI applications, and innovative digital solutions. Building tools that make AI accessible to Arabic speakers worldwide.",
+    "company_desc_ar": "شركة تقنية مصرية ناشئة متخصصة في تطوير الويب وتطبيقات الذكاء الاصطناعي والحلول الرقمية المبتكرة. بتبني أدوات بتخلي الذكاء الاصطناعي متاح للناطقين بالعربية في كل مكان.",
     "email": "ziad90216@gmail.com",
     "website": "https://ziadamrme.vercel.app",
     "github": "https://github.com/ziadamr45",
@@ -329,7 +331,7 @@ CREATOR_INFO = {
     "devto": "https://dev.to/ziad_amr_0e76916f10a8563a",
     "tech_stack": ["Next.js", "React", "TypeScript", "Tailwind CSS", "PostgreSQL", "Prisma", "Node.js", "Python", "Docker", "AI/ML"],
     "projects": [
-        {"name": "My Bro", "desc": "AI News Telegram Bot"},
+        {"name": "My Bro", "desc": "AI News Telegram Bot with multi-provider AI engine, memory system, and deep search"},
         {"name": "AuraEscape", "desc": "Endless Runner Game"},
         {"name": "Eah-Elkalam", "desc": "Egyptian Trend Radar"},
         {"name": "Quadra Studio", "desc": "Quranic Video Maker"},

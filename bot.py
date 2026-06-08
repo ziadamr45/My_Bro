@@ -646,7 +646,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await progress.update_stage(2)
 
         if not rss_results and not web_results:
-            ai_response = await smart_chat(f"ابحث عن معلومات عن: {query}" if lang == "ar" else f"Search for information about: {query}", lang)
+            ai_response = await smart_chat(f"ابحث عن معلومات عن: {query}" if lang == "ar" else f"Search for information about: {query}", lang, user_id=user_id)
             message = ai_response
         else:
             message += "━━━━━━━━━━━━━━━━━\n🤖 <i>My Bro — بحث متقدم</i>"

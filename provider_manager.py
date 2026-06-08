@@ -601,7 +601,7 @@ def get_provider_manager() -> ProviderManager:
 # ═══════════════════════════════════════
 
 async def call_ai(
-    prompt: str,
+    prompt,
     system_prompt: str = "",
     task_type: str = "chat",
     temperature: float = 0.7,
@@ -610,12 +610,29 @@ async def call_ai(
 ) -> Optional[str]:
     """
     استدعاء AI عبر Provider Manager (غير متزامن)
-    Compatible with the old ai_engine.call_ai interface
+    يدعم نص عادي أو قائمة رسائل (messages list)
+    - لو prompt هو string: يتعامل كرسالة مستخدم عادية
+    - لو prompt هو list: يتعامل كقائمة رسائل كاملة (مع سياق المحادثة)
     """
     if prefer_arabic and not system_prompt:
         system_prompt = "أنت 'My Bro' - مساعد ذكي شخصي. اسمك الوحيد My Bro ومفيش اسم تاني. لما حد يسألك مين أنت قول أنا My Bro. ماتقولش owo أو uwu أبداً. تجيب بالعربية الفصحى دائماً. اكتب كلام طبيعي وواضح من غير رموز غريبة. ماتستخدمش Markdown أبداً (لا *, **, #, |, ~). استخدم <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط بس."
 
     manager = get_provider_manager()
+
+    # لو prompt قائمة رسائل (مع سياق المحادثة)
+    if isinstance(prompt, list):
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(prompt)
+        return await manager.call_async(
+            messages=messages,
+            task_type=task_type,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    # لو prompt نص عادي
     return await manager.call_with_system_prompt_async(
         prompt=prompt,
         system_prompt=system_prompt,

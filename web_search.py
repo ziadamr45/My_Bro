@@ -30,29 +30,61 @@ def _get_ddgs():
 
 
 def _search_web_sync(query: str, max_results: int = 5) -> List[Dict]:
-    """البحث في الويب (متزامن)"""
+    """البحث في الويب (متزامن) مع retry logic"""
     DDGS = _get_ddgs()
     if DDGS is None:
         return []
 
-    try:
-        results = []
-        with DDGS() as ddgs:
-            search_results = list(ddgs.text(query, max_results=max_results))
+    # محاولة البحث مع retry
+    for attempt in range(2):
+        try:
+            results = []
+            with DDGS() as ddgs:
+                search_results = list(ddgs.text(query, max_results=max_results))
 
-            for r in search_results:
-                results.append({
-                    "title": r.get("title", ""),
-                    "link": r.get("href", ""),
-                    "snippet": r.get("body", ""),
-                })
+                for r in search_results:
+                    results.append({
+                        "title": r.get("title", ""),
+                        "link": r.get("href", ""),
+                        "snippet": r.get("body", ""),
+                    })
 
-        logger.info(f"DuckDuckGo search for '{query}': found {len(results)} results")
-        return results
+            logger.info(f"DuckDuckGo search for '{query}': found {len(results)} results")
+            
+            # لو النتائج قليلة، نجرب بحث أوسع
+            if len(results) < 2 and attempt == 0:
+                # تبسيط الاستعلام
+                simplified = query.split()
+                if len(simplified) > 3:
+                    simplified_query = " ".join(simplified[:3])
+                    logger.info(f"Retrying with simplified query: {simplified_query}")
+                    with DDGS() as ddgs:
+                        search_results = list(ddgs.text(simplified_query, max_results=max_results))
+                        for r in search_results:
+                            results.append({
+                                "title": r.get("title", ""),
+                                "link": r.get("href", ""),
+                                "snippet": r.get("body", ""),
+                            })
+                    # إزالة التكرار
+                    seen_links = set()
+                    unique_results = []
+                    for r in results:
+                        if r['link'] not in seen_links:
+                            seen_links.add(r['link'])
+                            unique_results.append(r)
+                    results = unique_results[:max_results]
+            
+            return results
 
-    except Exception as e:
-        logger.error(f"DuckDuckGo search error: {e}")
-        return []
+        except Exception as e:
+            logger.error(f"DuckDuckGo search error (attempt {attempt+1}): {e}")
+            if attempt == 0:
+                import time
+                time.sleep(1)
+                continue
+
+    return []
 
 
 async def search_web(query: str, max_results: int = 5) -> List[Dict]:
@@ -64,31 +96,37 @@ async def search_web(query: str, max_results: int = 5) -> List[Dict]:
 
 
 def _search_news_sync(query: str, max_results: int = 5) -> List[Dict]:
-    """البحث عن أخبار (متزامن)"""
+    """البحث عن أخبار (متزامن) مع retry logic"""
     DDGS = _get_ddgs()
     if DDGS is None:
         return []
 
-    try:
-        results = []
-        with DDGS() as ddgs:
-            search_results = list(ddgs.news(query, max_results=max_results))
+    for attempt in range(2):
+        try:
+            results = []
+            with DDGS() as ddgs:
+                search_results = list(ddgs.news(query, max_results=max_results))
 
-            for r in search_results:
-                results.append({
-                    "title": r.get("title", ""),
-                    "link": r.get("url", r.get("href", "")),
-                    "snippet": r.get("body", ""),
-                    "source": r.get("source", ""),
-                    "date": r.get("date", ""),
-                })
+                for r in search_results:
+                    results.append({
+                        "title": r.get("title", ""),
+                        "link": r.get("url", r.get("href", "")),
+                        "snippet": r.get("body", ""),
+                        "source": r.get("source", ""),
+                        "date": r.get("date", ""),
+                    })
 
-        logger.info(f"DuckDuckGo news search for '{query}': found {len(results)} results")
-        return results
+            logger.info(f"DuckDuckGo news search for '{query}': found {len(results)} results")
+            return results
 
-    except Exception as e:
-        logger.error(f"DuckDuckGo news search error: {e}")
-        return []
+        except Exception as e:
+            logger.error(f"DuckDuckGo news search error (attempt {attempt+1}): {e}")
+            if attempt == 0:
+                import time
+                time.sleep(1)
+                continue
+
+    return []
 
 
 async def search_news_async(query: str, max_results: int = 5) -> List[Dict]:

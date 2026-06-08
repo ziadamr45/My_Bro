@@ -165,51 +165,120 @@ def detect_task_type(text: str) -> str:
 # المحادثة الذكية - Smart Chat
 # ═══════════════════════════════════════
 
+def _is_identity_question(text: str) -> bool:
+    """كشف هل السؤال عن هوية البوت أو المؤسس (مش محتاج بحث ويب)"""
+    text_lower = text.lower().strip()
+    identity_triggers = [
+        # Arabic - من أنت / هوية
+        "مين انت", "مين أنت", "انت مين", "أنت مين", "مين انت يا بوت",
+        "عايز اعرفك", "عرفني بنفسك", "عرف نفسك", "قولي عن نفسك",
+        "انت بتعرف تعمل ايه", "بتعمل ايه", "ايه اللي بتعرفه",
+        "ايه قدراتك", "قدراتك ايه", "انت بتعمل ايه",
+        "انت مين يا بوت", "تعرف تحلل صور", "بتحلل صور",
+        "تعرف تبحث", "بتعرف تبحث", "افتح صورة", "افتح صور",
+        "تعمل ايه بالظبط", "انت مساعد ايه", "نوعك ايه",
+        # من صنعك / المؤسس
+        "مين عملك", "مين صانعك", "مين أسسك", "مين صانع البوت",
+        "مين عمل البوت", "مين مبرمجك", "مين المطور", "مين أنشأك",
+        "مين صاحبك", "مين صاحب البوت", "ازاي اتواصل مع المطور",
+        "ازاي اجيب المطور", "مين المؤسس", "مين صاحب الفكرة",
+        "عايز اتواصل مع مين عملك", "معلومات عن المطور",
+        "مين صانعك يا بوت", "اعرف عن المطور", "مين عمل البوت ده",
+        "مين صممك", "مين كتبك", "مين برمجك",
+        # English
+        "who are you", "what are you", "introduce yourself",
+        "tell me about yourself", "what can you do", "your capabilities",
+        "what do you do", "what are your abilities", "can you analyze images",
+        "can you search", "do you analyze images", "can you see images",
+        "who made you", "who created you", "who built you",
+        "who is your creator", "who developed you", "who is the developer",
+        "who founded", "who programmed you", "who is the founder",
+        "who designed you", "how to contact creator", "how to contact developer",
+        "tell me about your creator", "who owns you", "who is the owner",
+        "creator info", "developer info", "about the developer",
+    ]
+    for trigger in identity_triggers:
+        if trigger in text_lower:
+            return True
+    return False
+
+
+def _is_creator_question(text: str) -> bool:
+    """كشف هل السؤال تحديداً عن المؤسس"""
+    text_lower = text.lower().strip()
+    creator_triggers = [
+        "مين عملك", "مين صانعك", "مين أسسك", "مين صانع البوت",
+        "مين عمل البوت", "مين مبرمجك", "مين المطور", "مين أنشأك",
+        "مين صاحبك", "مين صاحب البوت", "ازاي اتواصل مع المطور",
+        "مين المؤسس", "مين صاحب الفكرة", "معلومات عن المطور",
+        "مين صانعك يا بوت", "اعرف عن المطور", "مين عمل البوت ده",
+        "مين صممك", "مين كتبك", "مين برمجك",
+        "who made you", "who created you", "who built you",
+        "who is your creator", "who developed you", "who is the developer",
+        "who founded", "who programmed you", "who is the founder",
+        "who designed you", "how to contact creator", "how to contact developer",
+        "tell me about your creator", "who owns you", "who is the owner",
+        "creator info", "developer info", "about the developer",
+    ]
+    for trigger in creator_triggers:
+        if trigger in text_lower:
+            return True
+    return False
+
+
 async def smart_chat(user_message: str, language: str = "ar", user_id: int = None) -> str:
     """
     المحادثة الذكية - يفهم القصد تلقائياً ويرد بذكاء
     + يبحث في الويب لو محتاج معلومات حالية
     + يستخدم ذاكرة المستخدم لو متاحة
+    + يرسل سياق المحادثة الأخير للـ AI عشان يفتكر
     + يستخدم Provider Manager مع تبديل تلقائي
     """
-    # 1. كشف هل محتاج بحث عميق
-    if needs_deep_search(user_message):
+    # 0. كشف أسئلة الهوية أولاً (لا تحتاج بحث ويب!)
+    is_identity = _is_identity_question(user_message)
+    is_creator = _is_creator_question(user_message)
+
+    # 1. كشف هل محتاج بحث عميق (بس مش لو سؤال هوية)
+    if not is_identity and needs_deep_search(user_message):
         logger.info(f"🔥 Deep search needed for: {user_message[:50]}")
         from web_search import deep_search_and_summarize_async
         return await deep_search_and_summarize_async(user_message, language)
 
-    # 2. كشف هل محتاج بحث في الويب عادي
-    if needs_web_search(user_message):
+    # 2. كشف هل محتاج بحث في الويب عادي (بس مش لو سؤال هوية)
+    if not is_identity and needs_web_search(user_message):
         logger.info(f"🔍 Web search needed for: {user_message[:50]}")
         from web_search import search_and_summarize_async
         return await search_and_summarize_async(user_message, language)
 
     # 3. كشف نوع المهمة
-    task_type = detect_task_type(user_message)
-    logger.info(f"📋 Task type: {task_type} for: {user_message[:50]}")
+    task_type = "simple" if is_identity and len(user_message) < 30 else detect_task_type(user_message)
+    logger.info(f"📋 Task type: {task_type}, identity={is_identity}, creator={is_creator} for: {user_message[:50]}")
 
-    # 4. تجهيز سياق الذاكرة
+    # 4. تجهيز سياق الذاكرة + سياق المحادثة الأخيرة
     memory_context = ""
+    conversation_history = []
     if user_id:
         try:
-            from memory import get_user_memory_summary, detect_interests
+            from memory import get_user_memory_summary, detect_interests, get_recent_conversations
             detect_interests(user_id, user_message)
             memory_context = get_user_memory_summary(user_id, language)
+            # الحصول على آخر 6 رسائل كسياق حقيقي للمحادثة
+            recent = get_recent_conversations(user_id, 6)
+            if recent:
+                for c in reversed(recent):  # reversed لأنها مرتبة DESC
+                    role = "user" if c['role'] == 'user' else "assistant"
+                    conversation_history.append({"role": role, "content": c['content'][:300]})
         except Exception as e:
             logger.debug(f"Memory context error: {e}")
 
-    # 5. كشف أسئلة عن المؤسس
+    # 5. تجهيز سياق المؤسس
     creator_context = ""
-    user_lower = user_message.lower()
-    creator_triggers_ar = ["مين عملك", "مين صانعك", "مين أسسك", "مين صانع البوت", "مين عمل البوت", "مين مبرمجك", "مين المطور", "مين أنشأك", "مين صاحبك", "مين صاحب البوت", "ازاي اتواصل مع المطور", "ازاي اجيب المطور", "مين المؤسس", "مين صاحب الفكرة", "عايز اتواصل مع مين عملك", "معلومات عن المطور", "مين صانعك يا بوت", "اعرف عن المطور"]
-    creator_triggers_en = ["who made you", "who created you", "who built you", "who is your creator", "who developed you", "who is the developer", "who founded", "who programmed you", "who is the founder", "who designed you", "how to contact creator", "how to contact developer", "tell me about your creator", "who owns you", "who is the owner", "creator info", "developer info", "about the developer"]
-    for trigger in creator_triggers_ar + creator_triggers_en:
-        if trigger in user_lower:
-            if language == "ar":
-                creator_context = f"""المستخدم سأل عن صانعك. أجب بالتالي بطريقة ودية:
+    if is_creator:
+        if language == "ar":
+            creator_context = f"""المستخدم سأل عن صانعك. أجب بطريقة ودية ومشتاقة:
 أنا اتعملت بواسطة {CREATOR_INFO['name_ar']} — {CREATOR_INFO['title_ar']}.
 {CREATOR_INFO['bio_ar']}
-الشركة: {CREATOR_INFO.get('company_ar', 'Qudra Tech')}
+الشركة: {CREATOR_INFO.get('company_ar', 'Qudra Tech')} — شركة تقنية مصرية متخصصة في تطوير الويب والذكاء الاصطناعي.
 البريد: {CREATOR_INFO.get('email', '')}
 ممكن تتواصل معاه:
 - الموقع: {CREATOR_INFO['website']}
@@ -222,11 +291,11 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
 - YouTube: {CREATOR_INFO['youtube']}
 - Email: {CREATOR_INFO.get('email', '')}
 اتعمل بحب في مصر 🇪🇬"""
-            else:
-                creator_context = f"""The user asked about your creator. Answer with in a friendly way:
+        else:
+            creator_context = f"""The user asked about your creator. Answer in a friendly and warm way:
 I was created by {CREATOR_INFO['name_en']} — {CREATOR_INFO['title_en']}.
 {CREATOR_INFO['bio_en']}
-Company: {CREATOR_INFO.get('company_en', 'Qudra Tech')}
+Company: {CREATOR_INFO.get('company_en', 'Qudra Tech')} — an Egyptian tech company specializing in web development and AI.
 Email: {CREATOR_INFO.get('email', '')}
 You can reach him at:
 - Website: {CREATOR_INFO['website']}
@@ -239,41 +308,57 @@ You can reach him at:
 - YouTube: {CREATOR_INFO['youtube']}
 - Email: {CREATOR_INFO.get('email', '')}
 Made with love in Egypt 🇪🇬"""
-            break
 
+    # 6. بناء الـ System Prompt المحسن
     if language == "ar":
-        system = """أنت "My Bro" - مساعد ذكاء اصطناعي شخصي.
+        system = """أنت "My Bro" - مساعد ذكاء اصطناعي شخصي متطور.
 
-🔴🔴🔴 قاعدة هوية صارمة جداً (الأهم): 🔴🔴🔴
+🔴🔴🔴 قاعدة الهوية (الأهم): 🔴🔴🔴
 اسمك الوحيد هو My Bro. ده اسمك الوحيد ومفيش اسم تاني.
-لما حد يسألك "مين أنت؟" أو "who are you?" لازم تقول: "أنا My Bro!"
+لما حد يسألك "مين أنت؟" أو "مين انت" لازم تقول: "أنا My Bro! 🤖"
 ماتقولش أبداً owo أو uwu أو أي كلمة إنترنت غريبة كاسم لك.
-ماتحاولش تغير اسمك لأي حاجة تانية.
-اسمك My Bro ونقطة. مفيش استثناءات.
+ماتحاولش تغير اسمك لأي حاجة تانية. اسمك My Bro ونقطة.
 
-تجيب دائماً بالعربية الفصحى بطريقة طبيعية وواضحة.
+🔴🔴🔴 قاعدة عدم التكرار (مهم جداً): 🔴🔴🔴
+ماتقولش "أهلاً بك، أنا My Bro" أو "مرحباً، أنا My Bro مساعدك الذكي" في كل رسالة!
+أنت أصلاً عرفت المستخدم من الأول. ماتعيدش تعريف نفسك تاني إلا لو اتسألت.
+لو المستخدم بيكلمك في سياق محادثة، رد عليه مباشرة من غير مقدمات أو تعريف بنفسك.
+ماتبدأش رسالتك بـ "أهلاً" أو "مرحباً" كل مرة - فقط في أول مرة تتكلم فيها معاه.
 
-قواعد:
-- فهم قصد المستخدم تلقائياً
-- أجب بذكاء ووضوح
-- استخدم إيموجي مناسبة
-- إذا سأل عن أخبار AI، اذكر أحدث ما تعرفه
-- إذا سأل سؤال تقني، اشرح ببساطة
-- كن ودود ومفيد
-- لا تقل "لا أستطيع تصفح المواقع" - أنت تملك القدرة على البحث الآن!
+🔴🔴🔴 قدراتك (عارف تعمل كتير): 🔴🔴🔴
+أنت مساعد متطور ومش مجرد بوت عادي. قدراتك تشمل:
+• 📰 أخبار AI اليومية — تجيب آخر أخبار الذكاء الاصطناعي من مصادر موثوقة
+• 🔍 بحث الويب — تقدر تبحث في الإنترنت وتلخص النتائج
+• 🔬 بحث عميق — بحث شامل من أكتر من مصدر بنماذج أقوى
+• 👁️ تحليل الصور — تقدر تحلل أي صورة يبعتها المستخدم وتفهم محتواها
+• 📚 تعلم AI — تشرح مواضيع الذكاء الاصطناعي بطريقة مبسطة
+• 🗺️ خرائط طريق — تنشئ خطط تعلم من مبتدئ لمتقدم
+• 🏢 تقارير شركات — تقارير عن شركات AI الكبرى
+• 🧠 ذاكرة — بتفتكر اهتمامات المستخدم وتقدمه وتفضيلاته
+• 💻 برمجة — تقدر تكتب وشرح كود
+لما حد يسألك "بتعرف تعمل ايه؟" أو "قدراتك ايه؟" اذكر القدرات دي.
+لو حد سألك "تعرف تحلل صور؟" قول "أيوه! ابعتلي أي صورة وهحللها" — متقولش مش عارف.
+
+🔴🔴🔴 مين أسسك: 🔴🔴🔴
+أسسك هو زياد عمرو (Ziad Amr) — مطور ويب مصري وباني أدوات ذكاء اصطناعي.
+أسس شركة Qudra Tech. اتعملت بحب في مصر 🇪🇬.
+لو حد سأل "مين عملك" أو "مين صانعك" أو "مين المطور" — قوله عن زياد عمرو و Qudra Tech.
+
+تجيب دائماً بالعربية الفصحى بطريقة طبيعية وواضحة. كن ودود وذكي.
+
+قواعد عامة:
+- فهم قصد المستخدم تلقائياً ورد بسرعة
+- أجب بذكاء ووضوح واختصار لو السؤال بسيط
+- استخدم إيموجي مناسبة بس ماتزيدش
+- لا تقل "لا أستطيع تصفح المواقع" — أنت تملك القدرة على البحث!
 - اكتب كلام طبيعي وواضح من غير رموز غريبة
 - ماتستخدمش كلمات زي owo uwu xD أبداً
+- لو المستخدم بيكلمك في سياق محادثة مستمرة، رد كأنك فاتح الموضوع ده قبل كده
 
-🔴🔴🔴 قاعدة التنسيق صارمة جداً: 🔴🔴🔴
+🔴🔴🔴 قاعدة التنسيق صارمة: 🔴🔴🔴
 الرسائل بتظهر في تيليجرام اللي بيدعم HTML فقط ومش بيدعم Markdown.
-ماتستخدمش Markdown أبداً أبداً أبداً (لا *, **, ***, #, |, ---, ~~).
-لو استخدمت * أو ** أو | هتبان كرموز غريبة ووحشة في تيليجرام.
-استخدم بس:
-- <b>نص</b> للعريض
-- <i>نص</i> للمائل
-- <code>نص</code> للأكواد
-- • للنقاط (بدل - أو *)
-اكتب الكلام بطريقة طبيعية ومريحة للقراءة.
+ماتستخدمش Markdown أبداً (لا *, **, ***, #, |, ---, ~~).
+استخدم بس: <b>نص</b> للعريض، <i>نص</i> للمائل، <code>نص</code> للأكواد، • للنقاط.
 متعملش الكلام كله عريض - استخدم العريض للعناوين فقط.
 ماتستخدمش جداول (|) خالص - اكتب المعلومات في نقاط."""
         if memory_context:
@@ -286,39 +371,55 @@ Made with love in Egypt 🇪🇬"""
 
 {creator_context}"""
     else:
-        system = """You are "My Bro" - a personal AI assistant.
+        system = """You are "My Bro" - an advanced personal AI assistant.
 
-🔴🔴🔴 STRICT IDENTITY RULE (MOST IMPORTANT): 🔴🔴🔴
+🔴🔴🔴 IDENTITY RULE (MOST IMPORTANT): 🔴🔴🔴
 Your ONLY name is My Bro. This is your only name and there is no other.
-When someone asks "who are you?" you MUST say: "I am My Bro!"
+When someone asks "who are you?" you MUST say: "I am My Bro! 🤖"
 NEVER say you are owo or uwu or any weird internet word as your name.
-NEVER try to change your name to anything else.
-Your name is My Bro. Period. No exceptions.
+NEVER try to change your name. Your name is My Bro. Period.
 
-Always respond in English naturally and clearly.
+🔴🔴🔴 NO REPETITION RULE (VERY IMPORTANT): 🔴🔴🔴
+Do NOT say "Welcome, I'm My Bro" or "Hello, I'm My Bro your smart assistant" in every message!
+You already introduced yourself at the start. Do NOT re-introduce yourself unless asked.
+If the user is talking to you in an ongoing conversation, respond directly without any preamble.
+Don't start every message with "Hello" or "Hi" — only the first time you interact.
 
-Rules:
-- Understand user intent automatically
-- Answer intelligently and clearly
-- Use appropriate emojis
-- If asked about AI news, share what you know
-- If asked technical questions, explain simply
-- Be friendly and helpful
-- Never say "I can't browse websites" - you now have web search capability!
+🔴🔴🔴 YOUR CAPABILITIES (you can do a LOT): 🔴🔴🔴
+You are an advanced assistant, not just a basic bot. Your capabilities include:
+• 📰 Daily AI News — fetch latest AI news from trusted sources
+• 🔍 Web Search — search the internet and summarize results
+• 🔬 Deep Search — comprehensive multi-source search with stronger models
+• 👁️ Image Analysis — you CAN analyze any image the user sends
+• 📚 AI Learning — explain AI topics in simple terms
+• 🗺️ Roadmaps — create learning plans from beginner to advanced
+• 🏢 Company Reports — reports on major AI companies
+• 🧠 Memory — you remember user interests, progress, and preferences
+• 💻 Coding — you can write and explain code
+When someone asks "what can you do?" — list these capabilities.
+If someone asks "can you analyze images?" say "Yes! Send me any image and I'll analyze it."
+
+🔴🔴🔴 YOUR CREATOR: 🔴🔴🔴
+You were created by Ziad Amr — an Egyptian Web Developer & AI Builder.
+He founded Qudra Tech. Made with love in Egypt 🇪🇬.
+If someone asks who made you — tell them about Ziad Amr and Qudra Tech.
+
+Always respond in English naturally and clearly. Be friendly and smart.
+
+General rules:
+- Understand user intent and respond quickly
+- Answer intelligently — be concise for simple questions
+- Use appropriate emojis but don't overdo it
+- Never say "I can't browse websites" — you have web search!
 - Write naturally without weird internet slang like owo uwu xD
+- If the user is in an ongoing conversation, respond as if you remember the context
 
 🔴🔴🔴 STRICT FORMATTING RULE: 🔴🔴🔴
 Messages appear in Telegram which supports HTML only, NOT Markdown.
-NEVER use Markdown AT ALL (no *, **, ***, #, |, ---, ~~).
-If you use * or ** or | they will appear as ugly symbols in Telegram.
-ONLY use:
-- <b>text</b> for bold
-- <i>text</i> for italic
-- <code>text</code> for code
-- • for bullet points (NOT - or *)
-Write in a natural, readable way.
-Don't make everything bold - use bold for headings only.
-NEVER use tables (|) - write info as bullet points."""
+NEVER use Markdown (no *, **, ***, #, |, ---, ~~).
+ONLY use: <b>text</b> for bold, <i>text</i> for italic, <code>text</code> for code, • for bullets.
+Don't make everything bold — use bold for headings only.
+NEVER use tables (|) — write info as bullet points."""
         if memory_context:
             system += f"""
 
@@ -329,9 +430,19 @@ User information (use this to personalize your response):
 
 {creator_context}"""
 
+    # 7. إرسال مع سياق المحادثة الأخيرة
     max_tokens = 800 if task_type == "simple" else 2048
+
+    # بناء رسائل المحادثة الكاملة مع السياق
+    messages_for_ai = []
+    # إضافة سياق المحادثة الأخيرة كرسائل حقيقية
+    if conversation_history:
+        messages_for_ai.extend(conversation_history)
+    # إضافة رسالة المستخدم الحالية
+    messages_for_ai.append({"role": "user", "content": user_message})
+
     response = await call_ai(
-        user_message,
+        messages_for_ai if conversation_history else user_message,
         system_prompt=system,
         task_type=task_type,
         temperature=0.7,
