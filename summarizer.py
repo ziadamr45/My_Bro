@@ -1,7 +1,8 @@
 """
 تلخيص الأخبار - News Summarizer Module
-يستخدم OpenRouter API لتلخيص الأخبار بالعربية
+يستخدم Provider Manager لتلخيص الأخبار بالعربية
 + دعم المكالمات غير المتزامنة
++ تبديل تلقائي بين المزودين
 """
 
 import asyncio
@@ -9,13 +10,8 @@ import logging
 import time as time_module
 from typing import List, Dict, Optional
 
-import requests
-
-from config import (
-    OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL,
-    OPENROUTER_FALLBACK_MODELS, FAST_MODEL, MAX_RETRIES, RETRY_DELAY,
-    REQUEST_TIMEOUT, FAST_TIMEOUT
-)
+from provider_manager import get_provider_manager
+from config import REQUEST_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -90,98 +86,45 @@ def parse_summaries(response_text: str, num_articles: int) -> List[str]:
     return summaries
 
 
-def _call_openrouter_sync(prompt: str, model: str) -> Optional[str]:
-    """استدعاء OpenRouter API (متزامن)"""
-    url = f"{OPENROUTER_BASE_URL}/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/ziadamr45/ai-news-bot",
-        "X-Title": "AI News Telegram Bot",
-    }
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "أنت مساعد عربي متخصص في أخبار الذكاء الاصطناعي. تجيب دائماً بالعربية الفصحى فقط."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 2048,
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-
-        if "choices" in data and len(data["choices"]) > 0:
-            content = data["choices"][0].get("message", {}).get("content", "")
-            if content:
-                return content
-
-        if "error" in data:
-            logger.warning(f"OpenRouter API error for {model}: {data['error']}")
-
-    except requests.exceptions.Timeout:
-        logger.warning(f"Timeout calling OpenRouter with model {model}")
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"Request error for model {model}: {str(e)[:150]}")
-    except Exception as e:
-        logger.warning(f"Unexpected error for model {model}: {str(e)[:150]}")
-
-    return None
-
-
-async def _call_openrouter(prompt: str, model: str) -> Optional[str]:
-    """استدعاء OpenRouter API (غير متزامن)"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, lambda: _call_openrouter_sync(prompt, model)
-    )
-
-
 def _summarize_articles_sync(articles: List[Dict]) -> List[Dict]:
-    """تلخيص الأخبار (متزامن - للتوافق مع main.py)"""
+    """تلخيص الأخبار (متزامن - باستخدام Provider Manager)"""
     if not articles:
         return articles
 
-    if not OPENROUTER_API_KEY:
+    manager = get_provider_manager()
+
+    # فحص هل في مزودين متاحين
+    routes = manager.get_model_routes("summary")
+    if not routes:
+        logger.warning("No summary providers available, using original descriptions")
         for article in articles:
             article["arabic_summary"] = article.get("description", "")[:200]
         return articles
 
-    logger.info(f"Summarizing {len(articles)} articles using OpenRouter API...")
+    logger.info(f"Summarizing {len(articles)} articles using Provider Manager...")
 
     prompt = create_summary_prompt(articles)
+    system_prompt = "أنت مساعد عربي متخصص في أخبار الذكاء الاصطناعي. تجيب دائماً بالعربية الفصحى فقط."
 
-    if FAST_MODEL:
-        models_to_try = [FAST_MODEL, OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
-    else:
-        models_to_try = [OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
+    response = manager.call_with_system_prompt_sync(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        task_type="summary",
+        temperature=0.3,
+        max_tokens=2048,
+    )
 
-    for attempt in range(MAX_RETRIES):
-        for model in models_to_try:
-            logger.info(f"Trying model: {model} (attempt {attempt + 1})")
-            result = _call_openrouter_sync(prompt, model)
+    if response:
+        summaries = parse_summaries(response, len(articles))
+        for i, article in enumerate(articles):
+            if i < len(summaries):
+                article["arabic_summary"] = summaries[i]
+            else:
+                article["arabic_summary"] = article.get("description", "")[:200]
+        logger.info(f"Successfully summarized {len(summaries)} articles")
+        return articles
 
-            if result:
-                summaries = parse_summaries(result, len(articles))
-                for i, article in enumerate(articles):
-                    if i < len(summaries):
-                        article["arabic_summary"] = summaries[i]
-                    else:
-                        article["arabic_summary"] = article.get("description", "")[:200]
-
-                logger.info(f"Successfully summarized {len(summaries)} articles using {model}")
-                return articles
-
-        if attempt < MAX_RETRIES - 1:
-            logger.info(f"Waiting {RETRY_DELAY}s before retry...")
-            time_module.sleep(RETRY_DELAY)
-
-    logger.warning("All OpenRouter attempts failed. Using original descriptions.")
+    logger.warning("All summarization attempts failed. Using original descriptions.")
     for article in articles:
         desc = article.get("description", "")
         article["arabic_summary"] = desc[:200] if desc else "تفاصيل الخبر متاحة عبر الرابط المرفق."

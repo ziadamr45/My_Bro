@@ -1,8 +1,9 @@
 """
 محرك الذكاء الاصطناعي - AI Engine
-يتعامل مع OpenRouter API لجميع وظائف الذكاء الاصطناعي
+يستخدم Provider Manager لكل وظائف الذكاء الاصطناعي
 + دعم البحث في الويب + كشف النية تلقائياً
 + دعم المكالمات غير المتزامنة (async) عشان ميتعطلش البوت
++ دعم الصور (Vision) وملفات PDF
 """
 
 import asyncio
@@ -10,12 +11,9 @@ import logging
 import re
 from typing import Optional
 
-import requests
-
+from provider_manager import get_provider_manager, call_ai, call_ai_sync
 from config import (
-    OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL,
-    OPENROUTER_FALLBACK_MODELS, FAST_MODEL, MAX_RETRIES, RETRY_DELAY,
-    REQUEST_TIMEOUT, FAST_TIMEOUT
+    CREATOR_INFO, REQUEST_TIMEOUT, FAST_TIMEOUT
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +36,28 @@ WEB_SEARCH_TRIGGERS_EN = [
     "browse", "check website", "go to", "look at",
     "tell me about", "what is the current", "what's the latest",
     "news about", "recent developments",
+]
+
+# كلمات تدل على إن المستخدم عاوز بحث عميق
+DEEP_SEARCH_TRIGGERS_AR = [
+    "ابحث بعمق", "بحث متقدم", "بحث شامل", "تحليل مفصل",
+    "دراسة مفصلة", "معلومات شاملة عن", "كل حاجة عن",
+    "مقارنة شاملة", "بحث معمق",
+]
+
+DEEP_SEARCH_TRIGGERS_EN = [
+    "deep search", "in-depth search", "comprehensive search",
+    "detailed analysis", "thorough research", "deep dive",
+    "comprehensive analysis", "in-depth analysis",
+]
+
+# كلمات تدل على إن المستخدم عايز كود
+CODING_TRIGGERS = [
+    "كود", "برمجة", "code", "programming", "python", "javascript",
+    "script", "function", "class", "api", "debug", "خطأ برمجي",
+    "coding", "developer", "تطوير", "برنامج", "algorithm",
+    "react", "nextjs", "next.js", "html", "css", "sql",
+    "اكتب كود", "write code", "كتب كود", "صلح كود", "fix code",
 ]
 
 
@@ -81,6 +101,32 @@ def needs_web_search(text: str) -> bool:
     return False
 
 
+def needs_deep_search(text: str) -> bool:
+    """كشف هل المستخدم محتاج بحث عميق"""
+    text_lower = text.lower().strip()
+
+    for trigger in DEEP_SEARCH_TRIGGERS_AR:
+        if trigger in text_lower:
+            return True
+
+    for trigger in DEEP_SEARCH_TRIGGERS_EN:
+        if trigger in text_lower:
+            return True
+
+    return False
+
+
+def is_coding_query(text: str) -> bool:
+    """كشف هل السؤال عن برمجة"""
+    text_lower = text.lower().strip()
+
+    for trigger in CODING_TRIGGERS:
+        if trigger in text_lower:
+            return True
+
+    return False
+
+
 def is_simple_query(text: str) -> bool:
     """
     تحديد هل السؤال بسيط ومش محتاج نموذج كبير
@@ -101,136 +147,18 @@ def is_simple_query(text: str) -> bool:
     return False
 
 
-# ═══════════════════════════════════════
-# استدعاء AI - AI API Calls
-# ═══════════════════════════════════════
-
-def _call_ai_sync(
-    prompt: str,
-    system_prompt: str = "",
-    temperature: float = 0.7,
-    max_tokens: int = 2048,
-    prefer_arabic: bool = False,
-    fast: bool = False,
-) -> Optional[str]:
+def detect_task_type(text: str) -> str:
     """
-    استدعاء OpenRouter API (متزامن - يتم تشغيله في thread منفصل)
+    كشف نوع المهمة تلقائياً
+    Returns: "simple", "coding", "deep_search", "chat"
     """
-    if not OPENROUTER_API_KEY:
-        logger.error("OPENROUTER_API_KEY not set")
-        return None
-
-    if prefer_arabic and not system_prompt:
-        system_prompt = "أنت 'My Bro' - مساعد ذكي شخصي. اسمك الوحيد My Bro ومفيش اسم تاني. لما حد يسألك مين أنت قول أنا My Bro. ماتقولش owo أو uwu أبداً. تجيب بالعربية الفصحى دائماً. اكتب كلام طبيعي وواضح من غير رموز غريبة. ماتستخدمش Markdown أبداً (لا *, **, #, |, ~). استخدم <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط بس."
-
-    url = f"{OPENROUTER_BASE_URL}/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/ziadamr45/ai-news-bot",
-        "X-Title": "My Bro AI Bot",
-    }
-
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    # اختيار الموديلات حسب السرعة
-    if fast and FAST_MODEL:
-        models_to_try = [FAST_MODEL] + [OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
-    else:
-        models_to_try = [OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
-
-    timeout = FAST_TIMEOUT if fast else REQUEST_TIMEOUT
-    max_retries = 1 if fast else MAX_RETRIES
-
-    payload = {
-        "model": models_to_try[0],
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-    for attempt in range(max_retries):
-        for model in models_to_try:
-            payload["model"] = model
-            try:
-                logger.info(f"Calling AI: model={model}, fast={fast}, attempt={attempt+1}")
-                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-                response.raise_for_status()
-
-                data = response.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    content = data["choices"][0].get("message", {}).get("content", "")
-                    if content:
-                        # شيل thinking/reasoning tags من نماذج Qwen3
-                        content = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', content, flags=re.DOTALL)
-                        content = content.strip()
-                        if content:
-                            logger.info(f"AI response from {model} (attempt {attempt+1}, {len(content)} chars)")
-                            return content
-
-                if "error" in data:
-                    error_msg = data.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    # لو rate limit أو موديل مش متاح، نحاول اللي بعده
-                    if "429" in str(error_msg) or "rate limit" in str(error_msg).lower():
-                        logger.warning(f"Rate limited, stopping all retries to save quota")
-                        return None
-                    logger.warning(f"API error for {model}: {error_msg}")
-                    continue
-
-            except requests.exceptions.Timeout:
-                logger.warning(f"Timeout ({timeout}s) for model {model}")
-            except requests.exceptions.RequestException as e:
-                error_str = str(e)
-                if "403" in error_str or "401" in error_str:
-                    logger.warning(f"Auth/region error for {model}, trying next")
-                    continue
-                if "429" in error_str:
-                    logger.warning(f"Rate limited for {model}, stopping retries")
-                    # لو وصلنا للحد، مفيش فايدة نحاول تاني
-                    return None
-                logger.warning(f"Request error for {model}: {error_str[:100]}")
-            except Exception as e:
-                logger.warning(f"Error for {model}: {str(e)[:100]}")
-
-        if attempt < max_retries - 1:
-            import time
-            time.sleep(RETRY_DELAY)
-
-    logger.error("All AI model attempts failed")
-    return None
-
-
-async def call_ai(
-    prompt: str,
-    system_prompt: str = "",
-    temperature: float = 0.7,
-    max_tokens: int = 2048,
-    prefer_arabic: bool = False,
-    fast: bool = False,
-) -> Optional[str]:
-    """
-    استدعاء OpenRouter API (غير متزامن - لا يحجب event loop)
-    يتم تشغيل الاستدعاء المتزامن في thread منفصل
-    """
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: _call_ai_sync(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            prefer_arabic=prefer_arabic,
-            fast=fast,
-        )
-    )
-    return result
+    if is_simple_query(text):
+        return "simple"
+    if is_coding_query(text):
+        return "coding"
+    if needs_deep_search(text):
+        return "deep_search"
+    return "chat"
 
 
 # ═══════════════════════════════════════
@@ -242,17 +170,25 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
     المحادثة الذكية - يفهم القصد تلقائياً ويرد بذكاء
     + يبحث في الويب لو محتاج معلومات حالية
     + يستخدم ذاكرة المستخدم لو متاحة
+    + يستخدم Provider Manager مع تبديل تلقائي
     """
-    # 1. كشف هل محتاج بحث في الويب
+    # 1. كشف هل محتاج بحث عميق
+    if needs_deep_search(user_message):
+        logger.info(f"🔥 Deep search needed for: {user_message[:50]}")
+        from web_search import deep_search_and_summarize_async
+        return await deep_search_and_summarize_async(user_message, language)
+
+    # 2. كشف هل محتاج بحث في الويب عادي
     if needs_web_search(user_message):
-        logger.info(f"Web search needed for: {user_message[:50]}")
+        logger.info(f"🔍 Web search needed for: {user_message[:50]}")
         from web_search import search_and_summarize_async
         return await search_and_summarize_async(user_message, language)
 
-    # 2. كشف هل سؤال بسيط
-    fast = is_simple_query(user_message)
+    # 3. كشف نوع المهمة
+    task_type = detect_task_type(user_message)
+    logger.info(f"📋 Task type: {task_type} for: {user_message[:50]}")
 
-    # 3. تجهيز سياق الذاكرة
+    # 4. تجهيز سياق الذاكرة
     memory_context = ""
     if user_id:
         try:
@@ -262,9 +198,8 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
         except Exception as e:
             logger.debug(f"Memory context error: {e}")
 
-    # 4. كشف أسئلة عن المؤسس
+    # 5. كشف أسئلة عن المؤسس
     creator_context = ""
-    from config import CREATOR_INFO
     user_lower = user_message.lower()
     creator_triggers_ar = ["مين عملك", "مين صانعك", "مين أسسك", "مين صانع البوت", "مين عمل البوت", "مين مبرمجك", "مين المطور", "مين أنشأك", "مين صاحبك"]
     creator_triggers_en = ["who made you", "who created you", "who built you", "who is your creator", "who developed you", "who is the developer", "who founded", "who programmed you"]
@@ -382,20 +317,34 @@ User information (use this to personalize your response):
 
 {creator_context}"""
 
-    max_tokens = 800 if fast else 2048
-    response = await call_ai(user_message, system_prompt=system, temperature=0.7, max_tokens=max_tokens, fast=fast)
+    max_tokens = 800 if task_type == "simple" else 2048
+    response = await call_ai(
+        user_message,
+        system_prompt=system,
+        task_type=task_type,
+        temperature=0.7,
+        max_tokens=max_tokens,
+    )
     if response is None:
         if language == "ar":
-            return "⚠️ sorry, أنا مش قادر أرد دلوقتي بسبب ضغط على السيرفر. 🔄 جرب تاني بعد شوية — هشتغل إن شاء الله!"
+            return "⚠️ أنا مش قادر أرد دلوقتي بسبب ضغط على السيرفر. 🔄 جرب تاني بعد شوية — هشتغل إن شاء الله!"
         else:
             return "⚠️ I can't respond right now due to server load. 🔄 Try again shortly — I'll be back up!"
+
+    return response
 
 
 async def ask_question(question: str, language: str = "ar") -> str:
     """
     /ask - سؤال مباشر مع إجابة مفصلة
     """
+    # كشف نوع المهمة
+    task_type = "coding" if is_coding_query(question) else "chat"
+
     if needs_web_search(question):
+        if needs_deep_search(question):
+            from web_search import deep_search_and_summarize_async
+            return await deep_search_and_summarize_async(question, language)
         from web_search import search_and_summarize_async
         return await search_and_summarize_async(question, language)
 
@@ -424,7 +373,13 @@ Use:
 - Key points
 - Links or references if possible"""
 
-    response = await call_ai(question, system_prompt=system, temperature=0.5, max_tokens=2048)
+    response = await call_ai(
+        question,
+        system_prompt=system,
+        task_type=task_type,
+        temperature=0.5,
+        max_tokens=2048,
+    )
     return response or ("لم أتمكن من الإجابة. 🤖" if language == "ar" else "I couldn't answer that. 🤖")
 
 
@@ -473,7 +428,13 @@ Format:
 
 ⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
-    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(
+        prompt,
+        task_type="chat",
+        temperature=0.5,
+        max_tokens=2048,
+        prefer_arabic=True,
+    )
     return response or ("لم أتمكن من شرح الموضوع. 🤖" if language == "ar" else "I couldn't explain this topic. 🤖")
 
 
@@ -559,7 +520,13 @@ Format:
 
 ⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
-    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(
+        prompt,
+        task_type="chat",
+        temperature=0.5,
+        max_tokens=2048,
+        prefer_arabic=True,
+    )
     return response or ("لم أتمكن من إنشاء خارطة طريق. 🤖" if language == "ar" else "I couldn't generate a roadmap. 🤖")
 
 
@@ -582,7 +549,7 @@ async def generate_company_report(company_key: str, language: str = "ar") -> str
         else:
             return f"❌ Company '{company_key}' not found.\n\nAvailable: " + ", ".join(COMPANY_DATA.keys())
 
-    # البحث عن أحدث أخبار الشركة (بشكل غير متزامن)
+    # البحث عن أحدث أخبار الشركة
     search_query = f"{company['name']} AI latest news 2025"
     from web_search import search_news_async
     news_results = await search_news_async(search_query, max_results=3)
@@ -650,9 +617,56 @@ Format:
 
 ⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only."""
 
-    response = await call_ai(prompt, temperature=0.5, max_tokens=2048, prefer_arabic=True)
+    response = await call_ai(
+        prompt,
+        task_type="chat",
+        temperature=0.5,
+        max_tokens=2048,
+        prefer_arabic=True,
+    )
 
     if response and news_text:
         response += news_text
 
     return response or ("لم أتمكن من إنشاء التقرير. 🤖" if language == "ar" else "I couldn't generate the report. 🤖")
+
+
+# ═══════════════════════════════════════
+# Vision - تحليل الصور
+# ═══════════════════════════════════════
+
+async def analyze_image(
+    image_url: str = None,
+    image_base64: str = None,
+    language: str = "ar",
+    user_message: str = "",
+) -> str:
+    """
+    تحليل صورة باستخدام نموذج الرؤية
+    """
+    manager = get_provider_manager()
+
+    if language == "ar":
+        prompt = user_message or "صف هذه الصورة بالتفصيل بالعربية. اذكر كل ما تراه فيها."
+        system_text = "أنت مساعد ذكي تحلل الصور. اسمك My Bro. تجيب بالعربية الفصحى. ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط."
+    else:
+        prompt = user_message or "Describe this image in detail."
+        system_text = "You are a smart assistant that analyzes images. Your name is My Bro. NEVER use Markdown. Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets."
+
+    # بناء messages مع الصورة
+    full_prompt = f"{system_text}\n\n{prompt}"
+
+    response = await manager.analyze_image_async(
+        text_prompt=full_prompt,
+        image_url=image_url,
+        image_base64=image_base64,
+        temperature=0.5,
+        max_tokens=1500,
+    )
+
+    if response:
+        from formatters import clean_ai_response
+        response = clean_ai_response(response)
+        return response
+
+    return "⚠️ لم أتمكن من تحليل الصورة." if language == "ar" else "⚠️ I couldn't analyze the image."

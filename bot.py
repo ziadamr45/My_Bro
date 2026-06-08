@@ -20,7 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 
 from config import BOT_TOKEN, BOT_NAME, BOT_VERSION, COMPANY_DATA, DAILY_NEWS_HOUR, DAILY_NEWS_MINUTE, DAILY_NEWS_TIMEZONE, BROADCAST_DELAY_SECONDS, CREATOR_INFO
-from ai_engine import smart_chat, ask_question, explain_topic, generate_roadmap, generate_company_report
+from ai_engine import smart_chat, ask_question, explain_topic, generate_roadmap, generate_company_report, analyze_image
 from memory import (
     get_user, get_language, set_language, get_news_time,
     set_news_time, set_sources, get_sources,
@@ -1044,6 +1044,151 @@ async def resetmemory_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ═══════════════════════════════════════
+# أوامر جديدة - New Commands (v6.0)
+# ═══════════════════════════════════════
+
+async def deepsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /deepsearch <query> - بحث عميق"""
+    user_id = update.effective_user.id
+    lang = get_language(user_id)
+    increment_command_count(user_id)
+
+    query = " ".join(context.args) if context.args else ""
+
+    if not query:
+        if lang == "ar":
+            msg = "🔬 <b>البحث العميق</b>\n\nاكتب ما تريد البحث عنه بعمق\nمثال: <code>/deepsearch مستقبل الذكاء الاصطناعي</code>\n\n💡 البحث العميق بيستخدم نماذج أقوى وبيبحث في أكتر من مصدر."
+        else:
+            msg = "🔬 <b>Deep Search</b>\n\nType what you want to search in depth\nExample: <code>/deepsearch future of artificial intelligence</code>\n\n💡 Deep search uses more powerful models and searches multiple sources."
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    stages = SEARCH_STAGES(lang)
+    title = f"بحث عميق: {query}" if lang == "ar" else f"Deep Search: {query}"
+    progress = ProgressManager(update, context, stages, lang, title)
+    await progress.start()
+
+    try:
+        await progress.update_stage(0)
+        await progress.update_stage(1)
+        from web_search import deep_search_and_summarize_async
+        response = await deep_search_and_summarize_async(query, lang)
+        response = clean_ai_response(response)
+        await progress.update_stage(2)
+        await progress.complete(final_message=response, delete_progress=False)
+    except Exception as e:
+        logger.error(f"Error in /deepsearch: {e}")
+        await progress.error("حدث خطأ في البحث العميق" if lang == "ar" else "Deep search error")
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /status - حالة المزودين"""
+    user_id = update.effective_user.id
+    lang = get_language(user_id)
+    increment_command_count(user_id)
+
+    try:
+        from provider_manager import get_provider_manager
+        manager = get_provider_manager()
+
+        status = manager.get_status()
+        chat_routes = manager.get_available_routes("chat")
+        simple_routes = manager.get_available_routes("simple")
+        coding_routes = manager.get_available_routes("coding")
+
+        if lang == "ar":
+            message = f"""🔧 <b>حالة المزودين - My Bro v6.0</b>
+━━━━━━━━━━━━━━━━━
+
+📡 <b>المزودين:</b>
+{status}
+
+🧠 <b>مسارات المحادثة:</b>
+{chat_routes}
+
+⚡ <b>مسارات سريعة:</b>
+{simple_routes}
+
+👨‍💻 <b>مسارات البرمجة:</b>
+{coding_routes}
+
+━━━━━━━━━━━━━━━━━
+🤖 <i>النظام يبدل تلقائياً بين المزودين عند الفشل</i>"""
+        else:
+            message = f"""🔧 <b>Provider Status - My Bro v6.0</b>
+━━━━━━━━━━━━━━━━━
+
+📡 <b>Providers:</b>
+{status}
+
+🧠 <b>Chat Routes:</b>
+{chat_routes}
+
+⚡ <b>Fast Routes:</b>
+{simple_routes}
+
+👨‍💻 <b>Coding Routes:</b>
+{coding_routes}
+
+━━━━━━━━━━━━━━━━━
+🤖 <i>System automatically switches providers on failure</i>"""
+
+    except Exception as e:
+        logger.error(f"Error in /status: {e}")
+        message = "❌ حصل خطأ" if lang == "ar" else "❌ Error occurred"
+
+    await update.message.reply_text(message, parse_mode="HTML")
+
+
+async def image_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة الصور - Image Analysis"""
+    user_id = update.effective_user.id
+    lang = get_language(user_id)
+    increment_chat_count(user_id)
+
+    # التحقق من وجود صورة
+    if not update.message.photo:
+        return
+
+    # الحصول على أكبر حجم صورة
+    photo = update.message.photo[-1]
+
+    # الحصول على نص المستخدم (إن وُجد)
+    user_text = update.message.caption or ""
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        # تحميل الصورة
+        file = await context.bot.get_file(photo.file_id)
+        image_url = file.file_path
+
+        # تحليل الصورة
+        response = await analyze_image(
+            image_url=image_url,
+            language=lang,
+            user_message=user_text,
+        )
+
+        # حفظ في الذاكرة
+        try:
+            save_conversation(user_id, "user", f"[صورة] {user_text[:100]}")
+            save_conversation(user_id, "bot", response[:200])
+            detect_interests(user_id, user_text)
+        except Exception:
+            pass
+
+        await update.message.reply_text(response, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Error in image_handler: {e}")
+        if lang == "ar":
+            await update.message.reply_text("❌ حصل خطأ في تحليل الصورة. جرب تاني.")
+        else:
+            await update.message.reply_text("❌ Error analyzing image. Please try again.")
+
+
+# ═══════════════════════════════════════
 # معالجة أزرار Inline - Callback Query
 # ═══════════════════════════════════════
 
@@ -1640,12 +1785,16 @@ def main():
     app.add_handler(CommandHandler("favorites", favorites_command))
     app.add_handler(CommandHandler("forget", forget_command))
     app.add_handler(CommandHandler("resetmemory", resetmemory_command))
+    app.add_handler(CommandHandler("deepsearch", deepsearch_command))
+    app.add_handler(CommandHandler("status", status_command))
 
     # أزرار Inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
     # المحادثة الحرة
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # معالجة الصور - Image handler
+    app.add_handler(MessageHandler(filters.PHOTO, image_handler))
 
     # ═══ إعداد الجدولة (APScheduler) - يتم تشغيله داخل event loop ═══
     _scheduler = AsyncIOScheduler(timezone=pytz.timezone(DAILY_NEWS_TIMEZONE))

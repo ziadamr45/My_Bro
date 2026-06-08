@@ -2,6 +2,8 @@
 بحث الويب - Web Search Module
 يستخدم DuckDuckGo (ddgs) للبحث مع تلخيص النتائج بالذكاء الاصطناعي
 + دعم المكالمات غير المتزامنة
++ دعم البحث العميق (Deep Search) باستخدام نماذج أقوى
++ استخدام Provider Manager مع تبديل تلقائي
 """
 
 import asyncio
@@ -97,15 +99,19 @@ async def search_news_async(query: str, max_results: int = 5) -> List[Dict]:
     )
 
 
-# Keep sync version for backward compatibility (main.py uses it)
+# Keep sync version for backward compatibility
 def search_news(query: str, max_results: int = 5) -> List[Dict]:
     """البحث عن أخبار محددة في الويب (متزامن)"""
     return _search_news_sync(query, max_results)
 
 
+# ═══════════════════════════════════════
+# البحث العادي والتلخيص - Normal Search & Summarize
+# ═══════════════════════════════════════
+
 def _search_and_summarize_sync(query: str, language: str = "ar") -> str:
     """البحث والتلخيص (متزامن)"""
-    from ai_engine import _call_ai_sync
+    from provider_manager import call_ai_sync
 
     results = _search_web_sync(query, max_results=5)
 
@@ -125,7 +131,7 @@ Question: {query}
 ⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code>"""
             system = "You are a smart assistant. Be accurate and use appropriate emojis. NEVER use Markdown."
 
-        response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
+        response = call_ai_sync(prompt, system_prompt=system, task_type="chat", temperature=0.5, max_tokens=1500)
         from formatters import clean_ai_response
         if response:
             response = clean_ai_response(response)
@@ -172,7 +178,7 @@ Format requirements:
 ⚠️ NEVER use Markdown (no *, **, #, |, ---). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
         system = "You are a smart assistant answering based on real search results. Use emojis and nice HTML formatting. NEVER use Markdown."
 
-    response = _call_ai_sync(prompt, system_prompt=system, temperature=0.5, max_tokens=1500)
+    response = call_ai_sync(prompt, system_prompt=system, task_type="chat", temperature=0.5, max_tokens=1500)
     from formatters import clean_ai_response
     if response:
         response = clean_ai_response(response)
@@ -191,6 +197,126 @@ async def search_and_summarize_async(query: str, language: str = "ar") -> str:
 def search_and_summarize(query: str, language: str = "ar") -> str:
     """البحث والتلخيص (متزامن - للتوافق مع الكود القديم)"""
     return _search_and_summarize_sync(query, language)
+
+
+# ═══════════════════════════════════════
+# البحث العميق - Deep Search
+# ═══════════════════════════════════════
+
+def _deep_search_and_summarize_sync(query: str, language: str = "ar") -> str:
+    """
+    البحث العميق - يستخدم نماذج أقوى وبحث أشمل
+    يجمع نتائج من بحث الويب + بحث الأخبار
+    ثم يلخص بنموذج Deep Search مخصص
+    """
+    from provider_manager import call_ai_sync
+
+    # 1. بحث متعدد المصادر
+    web_results = _search_web_sync(query, max_results=8)
+    news_results = _search_news_sync(query, max_results=5)
+
+    if not web_results and not news_results:
+        # لو مفيش نتائج، نحاول بالإجابة المباشرة
+        if language == "ar":
+            prompt = f"""أجب على السؤال التالي بأفضل ما تعرفه بشكل مفصل وشامل.
+
+السؤال: {query}
+
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
+            system = "أنت مساعد ذكي متخصص في البحث العميق. تجيب بالعربية الفصحى بشكل مفصل وشامل. ماتستخدمش Markdown أبداً."
+        else:
+            prompt = f"""Answer the following question comprehensively and in detail.
+
+Question: {query}
+
+⚠️ NEVER use Markdown (no *, **, #, |). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
+            system = "You are a smart assistant specialized in deep research. Answer comprehensively. NEVER use Markdown."
+
+        response = call_ai_sync(prompt, system_prompt=system, task_type="deep_search", temperature=0.4, max_tokens=3000)
+        from formatters import clean_ai_response
+        if response:
+            response = clean_ai_response(response)
+        return response or ("لم أتمكن من العثور على معلومات كافية. 🤖" if language == "ar" else "I couldn't find enough information. 🤖")
+
+    # 2. تجميع كل النتائج
+    search_text = ""
+    if web_results:
+        search_text += "\n🌐 نتائج بحث الويب:\n" if language == "ar" else "\n🌐 Web Search Results:\n"
+        for i, r in enumerate(web_results, 1):
+            search_text += f"\n--- نتيجة ويب {i} ---\n"
+            search_text += f"العنوان: {r['title']}\n"
+            search_text += f"المقتطف: {r['snippet']}\n"
+            search_text += f"الرابط: {r['link']}\n"
+
+    if news_results:
+        search_text += "\n📰 نتائج أخبار:\n" if language == "ar" else "\n📰 News Results:\n"
+        for i, r in enumerate(news_results, 1):
+            search_text += f"\n--- خبر {i} ---\n"
+            search_text += f"العنوان: {r['title']}\n"
+            search_text += f"المقتطف: {r['snippet']}\n"
+            search_text += f"الرابط: {r['link']}\n"
+            if r.get('source'):
+                search_text += f"المصدر: {r['source']}\n"
+            if r.get('date'):
+                search_text += f"التاريخ: {r['date']}\n"
+
+    # 3. تلخيص شامل باستخدام نموذج Deep Search
+    if language == "ar":
+        prompt = f"""🔬 <b>بحث عميق</b>
+
+بناءً على نتائج البحث الشاملة التالية، قدّم إجابة مفصلة ومنظمة بالعربية الفصحى.
+
+سؤال المستخدم: {query}
+
+نتائج البحث الشاملة:{search_text}
+
+المطلوب:
+- إجابة شاملة ومفصلة
+- تنظيم المعلومات بوضوح
+- ذكر المصادر والروابط
+- مقارنة بين الآراء إن وُجدت
+- استنتاجات وتوقعات إن أمكن
+- الروابط: 🔗 <a href="الرابط">عنوان الرابط</a>
+
+⚠️ ماتستخدمش Markdown أبداً (لا *, **, #, |, ---). استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط"""
+        system = """أنت باحث متخصص في البحث العميق. تجيب بالعربية الفصحى بشكل شامل ومفصل.
+تنظم المعلومات بشكل واضح مع ذكر المصادر.
+ماتستخدمش Markdown أبداً. استخدم HTML فقط: <b>عريض</b> <i>مائل</i> <code>كود</code> • نقاط."""
+    else:
+        prompt = f"""🔬 <b>Deep Search</b>
+
+Based on the following comprehensive search results, provide a detailed and organized answer in English.
+
+User's question: {query}
+
+Comprehensive search results:{search_text}
+
+Requirements:
+- Comprehensive and detailed answer
+- Well-organized information
+- Cite sources and links
+- Compare different viewpoints if available
+- Include conclusions and predictions if possible
+- Links: 🔗 <a href="link">Link title</a>
+
+⚠️ NEVER use Markdown (no *, **, #, |, ---). Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets"""
+        system = """You are a researcher specialized in deep search. Answer comprehensively and in detail.
+Organize information clearly with source citations.
+NEVER use Markdown. Use HTML only: <b>bold</b> <i>italic</i> <code>code</code> • bullets."""
+
+    response = call_ai_sync(prompt, system_prompt=system, task_type="deep_search", temperature=0.4, max_tokens=3000)
+    from formatters import clean_ai_response
+    if response:
+        response = clean_ai_response(response)
+    return response or ("لم أتمكن من معالجة نتائج البحث العميق. 🤖" if language == "ar" else "I couldn't process deep search results. 🤖")
+
+
+async def deep_search_and_summarize_async(query: str, language: str = "ar") -> str:
+    """البحث العميق والتلخيص (غير متزامن)"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: _deep_search_and_summarize_sync(query, language)
+    )
 
 
 def format_search_results(query: str, results: List[Dict], language: str = "ar") -> str:

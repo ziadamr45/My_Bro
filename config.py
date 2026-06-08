@@ -1,25 +1,84 @@
 """
 إعدادات البوت - Bot Configuration
 يتم قراءة جميع البيانات الحساسة من متغيرات البيئة (GitHub Secrets)
++ دعم متعدد المزودين (Groq, HuggingFace, Cohere, OpenRouter)
 """
 
 import os
 
+# ═══════════════════════════════════════
 # Telegram Settings
+# ═══════════════════════════════════════
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
-# OpenRouter API Settings
+# ═══════════════════════════════════════
+# مزودين AI - AI Providers
+# ═══════════════════════════════════════
+
+# Groq (سريع ومجاني - الأساسي)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# HuggingFace Inference API (مجاني عبر nscale)
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+HUGGINGFACE_BASE_URL = "https://inference-api.nscale.com/v1"
+
+# Cohere (مجاني مع مفاتيح)
+COHERE_API_KEY = os.environ.get("COHERE_API_KEY", "")
+
+# OpenRouter (مجاني محدود - 50 طلب/يوم)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# النموذج الرئيسي - NVIDIA Nemotron 3 Ultra 550B (أقوى نموذج مجاني متاح)
+# ═══════════════════════════════════════
+# مسارات النماذج - Model Routes
+# كل مسار فيه قائمة بـ {provider, model} مرتبة حسب الأولوية
+# ═══════════════════════════════════════
+
+# 🧠 Chat - المحادثة الذكية (أهم مسار)
+CHAT_MODELS = [
+    {"provider": "groq", "model": "qwen/qwen3-32b"},
+    {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+    {"provider": "huggingface", "model": "meta-llama/Llama-3.3-70B-Instruct"},
+    {"provider": "cohere", "model": "command-a-03-2025"},
+    {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
+]
+
+# ⚡ Simple - الرسائل البسيطة (تحيات، أسئلة قصيرة)
+SIMPLE_MODELS = [
+    {"provider": "huggingface", "model": "google/gemma-2-9b-it"},
+    {"provider": "openrouter", "model": "nvidia/nemotron-3-nano-30b-a3b:free"},
+]
+
+# 🔥 Deep Search - البحث العميق
+DEEP_SEARCH_MODELS = [
+    {"provider": "cohere", "model": "command-a-plus-05-2026"},
+    {"provider": "huggingface", "model": "Qwen/Qwen3-235B-A22B"},
+]
+
+# 👨‍💻 Coding - البرمجة
+CODING_MODELS = [
+    {"provider": "huggingface", "model": "Qwen/Qwen2.5-Coder-32B-Instruct"},
+    {"provider": "huggingface", "model": "meta-llama/Llama-3.3-70B-Instruct"},
+]
+
+# 📄 Summary - التلخيص
+SUMMARY_MODELS = [
+    {"provider": "cohere", "model": "command-a-03-2025"},
+    {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
+]
+
+# 👁️ Vision - تحليل الصور
+VISION_MODELS = [
+    {"provider": "groq", "model": "meta-llama/llama-4-scout-17b-16e-instruct"},
+    {"provider": "huggingface", "model": "Qwen/Qwen2.5-Coder-32B-Instruct"},
+]
+
+# النماذج البديلة لـ OpenRouter (للتوافق مع الكود القديم)
 OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
-
-# النموذج السريع - للأسئلة البسيطة والتحيات (أسرع نموذج)
 FAST_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
-
-# النماذج البديلة - مرتبة حسب الجودة والتوفر
 OPENROUTER_FALLBACK_MODELS = [
     "qwen/qwen3-coder:free",
     "qwen/qwen3-next-80b-a3b-instruct:free",
@@ -27,11 +86,23 @@ OPENROUTER_FALLBACK_MODELS = [
     "google/gemma-4-31b-it:free",
 ]
 
+# ═══════════════════════════════════════
+# إعدادات السرعة - Speed Settings
+# ═══════════════════════════════════════
+
+REQUEST_TIMEOUT = 30
+FAST_TIMEOUT = 15
+MAX_RETRIES = 3
+RETRY_DELAY = 3
+
+# ═══════════════════════════════════════
 # News Settings
+# ═══════════════════════════════════════
+
 MAX_NEWS_COUNT = 50
 MIN_NEWS_COUNT = 0
-NEWS_FETCH_HOURS = 24  # جلب أخبار آخر 24 ساعة
-WEEKLY_FETCH_HOURS = 168  # جلب أخبار آخر أسبوع
+NEWS_FETCH_HOURS = 24
+WEEKLY_FETCH_HOURS = 168
 
 # Scoring Weights
 SCORE_WEIGHTS = {
@@ -87,7 +158,7 @@ AI_KEYWORDS = [
     "ai startup", "ai funding", "ai acquisition",
 ]
 
-# Exclusion Keywords - topics to filter OUT
+# Exclusion Keywords
 EXCLUSION_KEYWORDS = [
     "smartphone", "iphone", "android phone", "samsung galaxy",
     "crypto", "bitcoin", "ethereum", "nft", "blockchain",
@@ -226,31 +297,16 @@ ROADMAPS = {
 }
 
 # ═══════════════════════════════════════
-# إعدادات السرعة - Speed Settings
-# ═══════════════════════════════════════
-
-# مهلة الطلب العادية (ثانية) - وقت كافي لنموذج Qwen الكبير
-REQUEST_TIMEOUT = 30
-
-# مهلة الطلب السريع (ثانية) - للأسئلة البسيطة
-FAST_TIMEOUT = 15
-
-# عدد محاولات إعادة المحاولة
-MAX_RETRIES = 3
-
-# تأخير بين المحاولات (ثانية)
-RETRY_DELAY = 3
-
-# ═══════════════════════════════════════
 # إعدادات البوت - Bot Settings
 # ═══════════════════════════════════════
 
 BOT_NAME = "My Bro"
-BOT_VERSION = "5.0"
+BOT_VERSION = "6.0"
 
 # ═══════════════════════════════════════
 # معلومات المؤسس - Creator Info
 # ═══════════════════════════════════════
+
 CREATOR_INFO = {
     "name_en": "Ziad Amr",
     "name_ar": "زياد عمرو",
@@ -270,7 +326,6 @@ CREATOR_INFO = {
 }
 
 # Memory / Storage
-# لو Railway Volume متوفر، استخدمه (بيانات دائمة حتى بعد إعادة النشر)
 RAILWAY_VOLUME_PATH = os.environ.get("RAILWAY_VOLUME_PATH", "")
 if RAILWAY_VOLUME_PATH and os.path.isdir(RAILWAY_VOLUME_PATH):
     DATA_DIR = RAILWAY_VOLUME_PATH
@@ -284,12 +339,9 @@ LOG_FILE = os.path.join(DATA_DIR, "bot.log")
 # إعدادات الجدولة - Scheduler Settings
 # ═══════════════════════════════════════
 
-# توقيت بث الأخبار اليومية (توقيت القاهرة)
-DAILY_NEWS_HOUR = 9   # 9 الصبح
-DAILY_NEWS_MINUTE = 0  # الساعة 9:00 بالظبط
+DAILY_NEWS_HOUR = 9
+DAILY_NEWS_MINUTE = 0
 DAILY_NEWS_TIMEZONE = "Africa/Cairo"
-
-# تأخير بين إرسال الأخبار لكل مشترك (ثانية) - عشان ميحصلش spam
 BROADCAST_DELAY_SECONDS = 0.5
 
 # No News Message

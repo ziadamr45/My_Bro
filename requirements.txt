@@ -5,3 +5,4 @@ aiohttp>=3.9.0
 ddgs>=9.0.0
 APScheduler>=3.10.0
 pytz>=2024.1
+cohere>=5.0.0
