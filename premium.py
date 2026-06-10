@@ -7,6 +7,7 @@
 
 import logging
 import os
+import time as _time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 
@@ -14,6 +15,18 @@ logger = logging.getLogger(__name__)
 
 # Timezone
 CAIRO_TZ = timezone(timedelta(hours=2))
+
+# ═══════════════════════════════════════
+# ⚡ كاش خطة المستخدم - Plan Cache
+ # ═══════════════════════════════════════
+# بدل ما نعمل DB query مع كل رسالة، بنخزن الخطة في الذاكرة لمدة دقيقة
+# ده بيقلل 10-15 DB query لكل رسالة!
+_plan_cache: Dict[int, tuple] = {}  # {user_id: (plan, expiry_timestamp)}
+_PLAN_CACHE_TTL = 60  # دقيقة واحدة
+
+# كاش الاستخدام - Usage Cache
+_usage_cache: Dict[int, tuple] = {}  # {user_id: (usage_dict, expiry_timestamp)}
+_USAGE_CACHE_TTL = 30  # 30 ثانية
 
 # ═══════════════════════════════════════
 # حدود الخطط - Plan Limits
@@ -273,7 +286,13 @@ def _migrate_add_deep_searches():
 # ═══════════════════════════════════════
 
 def get_user_plan(user_id: int) -> str:
-    """Get user's current plan (free, premium, or premium_plus)"""
+    """Get user's current plan (free, premium, or premium_plus) — ⚡ مع كاش"""
+    # ⚡ كاش: لو الخطة متخزنة ومش انتهت صلاحيتها
+    if user_id in _plan_cache:
+        plan, expiry = _plan_cache[user_id]
+        if _time.time() < expiry:
+            return plan
+    
     from memory import _ensure_user_in_db
     _ensure_user_in_db(user_id)
     
@@ -283,13 +302,18 @@ def get_user_plan(user_id: int) -> str:
         (user_id,), fetchone=True
     )
     if row:
-        return row[0]
-    # Create default entry
-    _execute(
-        f"INSERT INTO premium_users (user_id, plan) VALUES ({ph}, 'free')",
-        (user_id,)
-    )
-    return "free"
+        plan = row[0]
+    else:
+        # Create default entry
+        _execute(
+            f"INSERT INTO premium_users (user_id, plan) VALUES ({ph}, 'free')",
+            (user_id,)
+        )
+        plan = "free"
+    
+    # ⚡ حفظ في الكاش
+    _plan_cache[user_id] = (plan, _time.time() + _PLAN_CACHE_TTL)
+    return plan
 
 
 def is_premium(user_id: int) -> bool:
@@ -323,6 +347,9 @@ def grant_premium(user_id: int, granted_by: str = "admin", expires: str = None, 
             (user_id, plan, now, expires, granted_by)
         )
     logger.info(f"⭐ Premium granted to user {user_id} (plan: {plan})")
+    # ⚡ مسح الكاش عشان التغيير يظهر فوراً
+    _plan_cache.pop(user_id, None)
+    _usage_cache.pop(user_id, None)
 
 
 def revoke_premium(user_id: int):
@@ -333,6 +360,9 @@ def revoke_premium(user_id: int):
         ("free", user_id)
     )
     logger.info(f"❌ Premium revoked for user {user_id}")
+    # ⚡ مسح الكاش عشان التغيير يظهر فوراً
+    _plan_cache.pop(user_id, None)
+    _usage_cache.pop(user_id, None)
 
 
 def get_all_premium_users(platform: str = None):
@@ -392,7 +422,13 @@ def _ensure_usage_row(user_id: int, date_key: str):
 
 
 def get_usage(user_id: int) -> Dict:
-    """Get today's usage for user"""
+    """Get today's usage for user — ⚡ مع كاش"""
+    # ⚡ كاش: لو الاستخدام متخزن ومش انتهت صلاحيتها
+    if user_id in _usage_cache:
+        usage, expiry = _usage_cache[user_id]
+        if _time.time() < expiry:
+            return usage
+    
     date_key = _get_today_key()
     _ensure_usage_row(user_id, date_key)
     
@@ -402,7 +438,7 @@ def get_usage(user_id: int) -> Dict:
         (user_id, date_key), fetchone=True
     )
     if row:
-        return {
+        usage = {
             "ai_messages": row[0],
             "pdf_analyses": row[1],
             "image_analyses": row[2],
@@ -410,7 +446,12 @@ def get_usage(user_id: int) -> Dict:
             "searches": row[4],
             "deep_searches": row[5] if len(row) > 5 else 0,
         }
-    return {"ai_messages": 0, "pdf_analyses": 0, "image_analyses": 0, "youtube_summaries": 0, "searches": 0, "deep_searches": 0}
+    else:
+        usage = {"ai_messages": 0, "pdf_analyses": 0, "image_analyses": 0, "youtube_summaries": 0, "searches": 0, "deep_searches": 0}
+    
+    # ⚡ حفظ في الكاش
+    _usage_cache[user_id] = (usage, _time.time() + _USAGE_CACHE_TTL)
+    return usage
 
 
 def reset_user_usage(user_id: int) -> bool:
@@ -459,6 +500,8 @@ def increment_usage(user_id: int, feature: str, count: int = 1):
         f"UPDATE usage_tracking SET {feature} = {feature} + {count} WHERE user_id = {ph1} AND date = {ph2}",
         (user_id, date_key)
     )
+    # ⚡ مسح كاش الاستخدام عشان الرقم يتحدث
+    _usage_cache.pop(user_id, None)
 
 
 # ═══════════════════════════════════════

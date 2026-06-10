@@ -116,7 +116,7 @@ def load_short_term_memory(user_id: int, limit: int = CONTEXT_MESSAGES_FOR_AI, i
 # ذاكرة طويلة المدى - Long Term Memory
 # ═══════════════════════════════════════
 
-def load_long_term_memory(user_id: int, current_message: str = "") -> Dict[str, Any]:
+def load_long_term_memory(user_id: int, current_message: str = "", conversations: List[Dict] = None) -> Dict[str, Any]:
     """تحميل الذاكرة طويلة المدى - اهتمامات، مواضيع متكررة، تفضيلات
     
     يشمل:
@@ -125,6 +125,7 @@ def load_long_term_memory(user_id: int, current_message: str = "") -> Dict[str, 
     - الشركات المفضلة
     - الذكريات المحفوظة يدوياً
     - استرجاع دلالي: ذكريات متعلقة بالرسالة الحالية
+    ⚡ لو conversations متpassed، بيوفر DB query
     """
     long_term = {
         "interests": [],
@@ -166,7 +167,8 @@ def load_long_term_memory(user_id: int, current_message: str = "") -> Dict[str, 
             )
         
         # 6. المواضيع المتكررة (من آخر 50 محادثة)
-        long_term["frequent_topics"] = _extract_frequent_topics(user_id)
+        # ⚡ بنمرر conversations عشان نعمل DB query واحد بس
+        long_term["frequent_topics"] = _extract_frequent_topics(user_id, conversations=conversations)
         
     except Exception as e:
         logger.warning(f"Error loading long-term memory for {user_id}: {e}")
@@ -227,13 +229,15 @@ def _retrieve_relevant_memories(user_id: int, current_message: str,
     return relevant[:5]  # أعلى 5 ذكريات متعلقة
 
 
-def _extract_frequent_topics(user_id: int) -> List[str]:
+def _extract_frequent_topics(user_id: int, conversations: List[Dict] = None) -> List[str]:
     """استخراج المواضيع المتكررة من آخر 50 محادثة
     
     يحلل كلمات المستخدم المتكررة لتحديد المواضيع اللي بيتكلم عنها كتير
+    ⚡ لو conversations متpassed، مش هنعمل DB query تاني
     """
     try:
-        conversations = get_recent_conversations(user_id, MAX_SHORT_TERM_MESSAGES)
+        if conversations is None:
+            conversations = get_recent_conversations(user_id, MAX_SHORT_TERM_MESSAGES)
         if not conversations:
             return []
         
@@ -321,7 +325,8 @@ def build_context_for_ai(user_id: int, current_message: str,
     short_term = load_short_term_memory(user_id, context_limit, is_premium_user=is_premium_user)
     
     # 3. تحميل ذاكرة طويلة المدى + استرجاع دلالي
-    long_term = load_long_term_memory(user_id, current_message)
+    # ⚡ بنمرر short_term كـ conversations عشان نعمل DB query واحد بس
+    long_term = load_long_term_memory(user_id, current_message, conversations=short_term)
     
     # 4. كشف اهتمامات جديدة من الرسالة الحالية
     try:

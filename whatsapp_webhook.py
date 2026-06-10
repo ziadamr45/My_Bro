@@ -1844,7 +1844,7 @@ async def _send_ai_response(wa_id: str, user_message: str, wa_user_id: int, cont
         for chunk in chunks:
             await _send_whatsapp_message(wa_id, chunk)
             if len(chunks) > 1:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.05)  # ⚡ كان 0.3s - اتعمل 0.05s عشان سرعة أكتر
 
         # Increment usage (skip for admin)
         if not is_admin:
