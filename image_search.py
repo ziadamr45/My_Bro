@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════
 
 REQUEST_TIMEOUT = 15
-MAX_IMAGE_COUNT = 10
+MAX_IMAGE_COUNT = 15
 MIN_IMAGE_COUNT = 1
 
 # User-Agent

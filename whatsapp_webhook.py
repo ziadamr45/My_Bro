@@ -1435,7 +1435,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                     'preferredquality': '192',
                 }]
             
-            # Add cookies if available
+            # ═══ إضافة كوكيز + إعدادات YouTube المحسّنة ═══
             cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
             if os.path.exists(cookies_path):
                 try:
@@ -1446,12 +1446,24 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 except Exception:
                     pass
             
+            # 🔴 FIX: إضافة deno + remote_components لليوتيوب (زي التليجرام بالظبط)
+            # ده أفضل طريقة لتخطي bot detection — بيدي 37 تنسيق لحد 1080p
+            is_youtube_platform = platform.lower() == "youtube"
+            if is_youtube_platform:
+                try:
+                    from handlers.download_handlers import _ensure_deno_in_path
+                    _ensure_deno_in_path()
+                    ydl_opts['remote_components'] = ['ejs:github']
+                    logger.info("🔧 WhatsApp yt-dlp: default mode + deno + remote_components (best method)")
+                except Exception:
+                    logger.warning("⚠️ Could not add deno/remote_components for WhatsApp yt-dlp")
+            
             # Download video — Multi-stage approach
             loop = asyncio.get_event_loop()
             info = None
             last_error = None
             
-            # ═══ المرحلة 1: yt-dlp مباشر (الأفضل) ═══
+            # ═══ المرحلة 1: yt-dlp مباشر + deno + remote_components (الأفضل) ═══
             try:
                 def _run_ytdlp():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1463,7 +1475,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                     timeout=300  # 5 minutes max
                 )
                 if info:
-                    logger.info(f"✅ yt-dlp download succeeded directly")
+                    logger.info(f"✅ yt-dlp download succeeded directly (deno + remote_components)")
             except Exception as e:
                 last_error = e
                 logger.warning(f"⚠️ yt-dlp direct download failed: {e}")
@@ -1477,37 +1489,41 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                     except Exception:
                         pass
             
-            # ═══ المرحلة 2: yt-dlp مع خيارات مختلفة (بدون كوكيز) ═══
+            # ═══ المرحلة 2: yt-dlp player_client fallback chain (زي التليجرام) ═══
             if info is None:
-                try:
-                    # Try with android client (less likely to be blocked)
-                    alt_opts = dict(ydl_opts)
-                    alt_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
-                    if 'cookiefile' in alt_opts:
-                        del alt_opts['cookiefile']
-                    
-                    def _run_ytdlp_alt():
-                        with yt_dlp.YoutubeDL(alt_opts) as ydl:
-                            info = ydl.extract_info(url, download=True)
-                            return info
-                    
-                    info = await asyncio.wait_for(
-                        loop.run_in_executor(None, _run_ytdlp_alt),
-                        timeout=300
-                    )
-                    if info:
-                        logger.info(f"✅ yt-dlp android client download succeeded")
-                except Exception as e2:
-                    last_error = e2
-                    logger.warning(f"⚠️ yt-dlp android client also failed: {e2}")
-                    # 🔴 لو bot detection — حدث yt-dlp فوراً
-                    err_str2 = str(e2).lower()
-                    if any(kw in err_str2 for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
-                        try:
-                            from handlers.download_handlers import trigger_ytdlp_update
-                            trigger_ytdlp_update()
-                        except Exception:
-                            pass
+                _YOUTUBE_PLAYER_CLIENTS = ['android', 'ios', 'mweb', 'tv', 'web']
+                for pc_idx, pc in enumerate(_YOUTUBE_PLAYER_CLIENTS):
+                    try:
+                        alt_opts = dict(ydl_opts)
+                        alt_opts['extractor_args'] = {'youtube': {'player_client': [pc]}}
+                        # 🔴 FIX: نشيل remote_components مع player_client (مش متوافقين)
+                        alt_opts.pop('remote_components', None)
+                        
+                        logger.info(f"🔧 WhatsApp yt-dlp fallback: player_client={pc} (attempt {pc_idx + 1})")
+                        
+                        def _run_ytdlp_alt():
+                            with yt_dlp.YoutubeDL(alt_opts) as ydl:
+                                info = ydl.extract_info(url, download=True)
+                                return info
+                        
+                        info = await asyncio.wait_for(
+                            loop.run_in_executor(None, _run_ytdlp_alt),
+                            timeout=300
+                        )
+                        if info:
+                            logger.info(f"✅ yt-dlp {pc} client download succeeded")
+                            break
+                    except Exception as e2:
+                        last_error = e2
+                        logger.warning(f"⚠️ yt-dlp {pc} client failed: {e2}")
+                        # 🔴 لو bot detection — حدث yt-dlp فوراً
+                        err_str2 = str(e2).lower()
+                        if any(kw in err_str2 for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
+                            try:
+                                from handlers.download_handlers import trigger_ytdlp_update
+                                trigger_ytdlp_update()
+                            except Exception:
+                                pass
             
             # ═══ المرحلة 3: Cloudflare Worker Proxy Fallback ═══
             # لو yt-dlp فشل على Railway (IPs محجوبة)، نجرب عبر Cloudflare Worker

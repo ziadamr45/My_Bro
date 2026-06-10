@@ -161,7 +161,7 @@ def register_handlers(app):
     app.add_handler(CommandHandler("video", video_search_command))
     app.add_handler(CommandHandler("audio", audio_search_command))
     app.add_handler(CommandHandler("photo", photo_search_command))
-    app.add_handler(CallbackQueryHandler(handle_search_callback, pattern="^(sv|sa)_"))
+    app.add_handler(CallbackQueryHandler(handle_search_callback, pattern="^(sv|sa|sp)_"))
 
     # 🍪 أمر الكوكيز (أدمن بس) — عشان يرفع ملف cookies.txt لـ YouTube
     app.add_handler(CommandHandler("cookies", cookies_command))

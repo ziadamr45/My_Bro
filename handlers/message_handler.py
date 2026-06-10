@@ -867,9 +867,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif cmd == "photo_search_prompt":
             if lang == "ar":
-                msg = "🖼️ <b>بحث صور</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/photo قطط لطيفة</code>\n\n💡 هنرسللك 3 صور تلقائياً!"
+                msg = "🖼️ <b>بحث صور</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/photo قطط لطيفة</code>\n\n💡 هتختار عدد الصور من الأزرار (3 / 5 / 10 / 15)"
             else:
-                msg = "🖼️ <b>Image Search</b>\n\nType your search query after the command\nExample: <code>/photo cute cats</code>\n\n💡 We'll send you 3 images automatically!"
+                msg = "🖼️ <b>Image Search</b>\n\nType your search query after the command\nExample: <code>/photo cute cats</code>\n\n💡 You'll choose the number of images from buttons (3 / 5 / 10 / 15)"
             await update.message.reply_text(msg, parse_mode="HTML")
             return
         else:

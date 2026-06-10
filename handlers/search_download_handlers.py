@@ -12,7 +12,10 @@ Media Search Handler 🔍🎬🎵🖼️
 2. البوت بيبحث في YouTube ويعرض 5 نتائج كأزرار
 3. المستخدم يدوس على نتيجة ويتحمل الفيديو/الصوت
 
-🔴 ده نفس النظام الموجود في الواتساب بس دلوقتي للتليجرام كمان
+🔴 تحميل الصور:
+1. المستخدم يكتب /photo قطط مثلاً
+2. البوت بيسأله: عايز كام صورة؟ وبيعرض أزرار (3 / 5 / 10 / 15)
+3. المستخدم يدوس على العدد ويتحملوا
 """
 
 import logging
@@ -250,7 +253,11 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /photo <بحث> — بحث عن صور وتحميلها"""
+    """أمر /photo <بحث> — بحث عن صور وتحميلها
+    
+    🔴 FIX: دلوقتي بيظهر أزرار اختيار عدد الصور (3 / 5 / 10 / 15)
+    زي الواتساب بالظبط — المستخدم يدوس على العدد ويتنفذ التحميل
+    """
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
@@ -268,43 +275,85 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not query:
         if lang == "ar":
-            msg = "🖼️ <b>بحث صور</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/photo قطط لطيفة</code>\n\n💡 هنرسللك 3 صور تلقائياً"
+            msg = "🖼️ <b>بحث صور</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/photo قطط لطيفة</code>\n\n💡 هتختار عدد الصور من الأزرار"
         else:
-            msg = "🖼️ <b>Image Search</b>\n\nType your search query after the command\nExample: <code>/photo cute cats</code>\n\n💡 We'll send you 3 images automatically"
+            msg = "🖼️ <b>Image Search</b>\n\nType your search query after the command\nExample: <code>/photo cute cats</code>\n\n💡 You'll choose the number of images from buttons"
         await update.message.reply_text(msg, parse_mode="HTML")
         return
     
     try: track_event("photo_search_requests")
     except: pass
     
-    status_msg = await update.message.reply_text(
-        f"🖼️ جاري البحث عن صور لـ: {query}..." if lang == "ar"
-        else f"🖼️ Searching images for: {query}..."
-    )
+    # ═══ حفظ الاستعلام في cache + عرض أزرار عدد الصور ═══
+    # مثل الواتساب بالضبط — المستخدم يختار العدد الأول وبعدين ننفذ البحث
+    cache_key = hashlib.md5(f"ps_{user_id}_{query}".encode()).hexdigest()[:12]
+    _cache_results(cache_key, [], "photo", query)
+    
+    if lang == "ar":
+        text = f"🖼️ <b>بحث عن صور: {query}</b>\n━━━━━━━━━━━━━━━━━\n\nكم صورة تريد؟\n\n💡 اختار من الأزرار:"
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("3 صور", callback_data=f"sp_{cache_key}_3"),
+                InlineKeyboardButton("5 صور", callback_data=f"sp_{cache_key}_5"),
+            ],
+            [
+                InlineKeyboardButton("10 صور", callback_data=f"sp_{cache_key}_10"),
+                InlineKeyboardButton("15 صورة", callback_data=f"sp_{cache_key}_15"),
+            ],
+        ])
+    else:
+        text = f"🖼️ <b>Image search: {query}</b>\n━━━━━━━━━━━━━━━━━\n\nHow many images?\n\n💡 Choose from buttons:"
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("3 images", callback_data=f"sp_{cache_key}_3"),
+                InlineKeyboardButton("5 images", callback_data=f"sp_{cache_key}_5"),
+            ],
+            [
+                InlineKeyboardButton("10 images", callback_data=f"sp_{cache_key}_10"),
+                InlineKeyboardButton("15 images", callback_data=f"sp_{cache_key}_15"),
+            ],
+        ])
+    
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _execute_photo_search(query_obj, query_text: str, count: int, lang: str, user_id: int):
+    """تنفيذ بحث الصور بعد ما المستخدم حدد العدد
+    
+    🔴 تم فصلها في دالة مستقلة عشان تتنفذ لما المستخدم يدوس على زرار العدد
+    """
+    message = query_obj.message
     
     try:
         from image_search import search_images, download_image
         
-        results = await search_images(query, count=3)
+        if lang == "ar":
+            await query_obj.edit_message_text(f"🖼️ جاري البحث عن {count} صور لـ: {query_text}...")
+        else:
+            await query_obj.edit_message_text(f"🖼️ Searching for {count} images: {query_text}...")
+        
+        results = await search_images(query_text, count=count)
         
         if not results:
-            await status_msg.edit_text(
-                "❌ مفيش صور. جرب كلمات بحث تانية!" if lang == "ar"
-                else "❌ No images found. Try different keywords!"
-            )
+            if lang == "ar":
+                await query_obj.edit_message_text("❌ مفيش صور. جرب كلمات بحث تانية!")
+            else:
+                await query_obj.edit_message_text("❌ No images found. Try different keywords!")
             return
         
-        await status_msg.edit_text(
-            f"📥 جاري تحميل {len(results)} صور..." if lang == "ar"
-            else f"📥 Downloading {len(results)} images..."
-        )
+        actual_count = min(count, len(results))
+        
+        if lang == "ar":
+            await query_obj.edit_message_text(f"📥 جاري تحميل {actual_count} صور...")
+        else:
+            await query_obj.edit_message_text(f"📥 Downloading {actual_count} images...")
         
         # تحميل وإرسال كل صورة
         sent_count = 0
         tmpdir = tempfile.mkdtemp(prefix="mybro_photo_")
         
         try:
-            for i, r in enumerate(results[:3]):
+            for i, r in enumerate(results[:count]):
                 url = r.get("full_url") or r.get("url") or r.get("thumbnail", "")
                 if not url:
                     continue
@@ -317,7 +366,7 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     source = r.get('source', '')
                     
                     if lang == "ar":
-                        caption = f"🖼️ صورة {i+1}/{len(results)}"
+                        caption = f"🖼️ صورة {i+1}/{actual_count}"
                         if desc:
                             caption += f"\n📝 {desc}"
                         if author:
@@ -325,7 +374,7 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
                         if source:
                             caption += f"\n📁 {source}"
                     else:
-                        caption = f"🖼️ Image {i+1}/{len(results)}"
+                        caption = f"🖼️ Image {i+1}/{actual_count}"
                         if desc:
                             caption += f"\n📝 {desc}"
                         if author:
@@ -335,7 +384,7 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     
                     try:
                         with open(file_path, 'rb') as f:
-                            await update.message.reply_photo(
+                            await message.reply_photo(
                                 photo=f,
                                 caption=caption,
                                 parse_mode="HTML",
@@ -355,32 +404,42 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 pass
         
         if sent_count > 0:
-            try: os.remove(file_path) if file_path else None
-            except: pass
-            
             increment_usage(user_id, "image_analyses")
             try: track_event("photo_search_downloads")
             except: pass
             
-            await status_msg.delete()
+            # حذف رسالة "جاري التحميل"
+            try:
+                await query_obj.delete_message()
+            except:
+                try:
+                    if lang == "ar":
+                        await query_obj.edit_message_text(f"✅ تم إرسال {sent_count}/{actual_count} صورة!")
+                    else:
+                        await query_obj.edit_message_text(f"✅ Sent {sent_count}/{actual_count} images!")
+                except:
+                    pass
         else:
-            await status_msg.edit_text(
-                "❌ فشل تحميل الصور. جرب تاني!" if lang == "ar"
-                else "❌ Failed to download images. Try again!"
-            )
+            if lang == "ar":
+                await query_obj.edit_message_text("❌ فشل تحميل الصور. جرب تاني!")
+            else:
+                await query_obj.edit_message_text("❌ Failed to download images. Try again!")
         
     except ImportError:
         logger.error("❌ image_search module not available")
-        await status_msg.edit_text(
-            "❌ ميزة البحث عن صور مش متاحة حالياً." if lang == "ar"
-            else "❌ Image search feature is currently unavailable."
-        )
+        if lang == "ar":
+            await query_obj.edit_message_text("❌ ميزة البحث عن صور مش متاحة حالياً.")
+        else:
+            await query_obj.edit_message_text("❌ Image search feature is currently unavailable.")
     except Exception as e:
         logger.error(f"❌ Photo search error: {e}")
-        await status_msg.edit_text(
-            f"❌ حصل خطأ في البحث. جرب تاني!" if lang == "ar"
-            else "❌ Search error. Try again!"
-        )
+        try:
+            if lang == "ar":
+                await query_obj.edit_message_text("❌ حصل خطأ في البحث. جرب تاني!")
+            else:
+                await query_obj.edit_message_text("❌ Search error. Try again!")
+        except:
+            pass
 
 
 # ═══════════════════════════════════════
@@ -393,6 +452,7 @@ async def handle_search_callback(update: Update, context: ContextTypes.DEFAULT_T
     🔴 أنماط الـ callback:
     - sv_{cache_key}_{index} → فيديو
     - sa_{cache_key}_{index} → صوت
+    - sp_{cache_key}_{count} → صور (عدد الصور المطلوب)
     """
     query = update.callback_query
     await query.answer()
@@ -406,7 +466,39 @@ async def handle_search_callback(update: Update, context: ContextTypes.DEFAULT_T
     if len(parts) < 3:
         return
     
-    action = parts[0]  # sv أو sa
+    action = parts[0]  # sv أو sa أو sp
+    
+    # 🔴 معالجة خاصة لبحث الصور — sp_{cache_key}_{count}
+    if action == "sp":
+        cache_key = parts[1]
+        try:
+            count = int(parts[2])
+        except ValueError:
+            return
+        
+        # استرجاع الاستعلام من cache
+        cached = _get_cached(cache_key)
+        if not cached:
+            if lang == "ar":
+                await query.edit_message_text("❌ النتائج انتهت. ابحث تاني!")
+            else:
+                await query.edit_message_text("❌ Results expired. Search again!")
+            return
+        
+        search_query = cached.get("query", "")
+        
+        if not search_query:
+            if lang == "ar":
+                await query.edit_message_text("❌ حصل خطأ. جرب تاني!")
+            else:
+                await query.edit_message_text("❌ Error occurred. Try again!")
+            return
+        
+        # تنفيذ بحث الصور بالعدد المحدد
+        await _execute_photo_search(query, search_query, count, lang, user_id)
+        return
+    
+    # ═══ معالجة فيديو وصوت ═══
     cache_key = parts[1]
     try:
         index = int(parts[2])
