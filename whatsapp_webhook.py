@@ -131,6 +131,43 @@ _MAX_DEDUP_CACHE = 1000
 
 _wa_user_pdf_context = {}  # PDF context per user for follow-up Q&A
 
+# ═══════════════════════════════════════
+# نظام حالة المستخدم — Workflow State Management
+# ═══════════════════════════════════════
+# بيحفظ حالة المستخدم النشطة عشان الرسائل توصل للخدمة الصح
+# الأنواع المدعومة:
+#   photo_search  → في انتظار عدد الصور
+#   video_search  → في انتظار اختيار فيديو من القائمة
+#   audio_search  → في انتظار اختيار صوت من القائمة
+#   image_edit    → في انتظار وصف التعديل على صورة
+#   pdf_qa        → في انتظار سؤال عن PDF
+#   download      → في انتظار اختيار جودة التحميل
+_wa_user_state = {}  # {wa_id: {"flow": str, "data": dict, "expires": float}}
+_WA_STATE_TTL = 300  # 5 دقائق — بعد كده الحالة تنتهي تلقائياً
+
+def _set_user_state(wa_id: str, flow: str, data: dict = None):
+    """حفظ حالة المستخدم النشطة"""
+    _wa_user_state[wa_id] = {
+        "flow": flow,
+        "data": data or {},
+        "expires": time.time() + _WA_STATE_TTL,
+    }
+
+def _get_user_state(wa_id: str) -> dict:
+    """الحصول على حالة المستخدم النشطة (أو None لو مفيش)"""
+    state = _wa_user_state.get(wa_id)
+    if not state:
+        return None
+    if time.time() > state.get("expires", 0):
+        # الحالة انتهت — امسحها
+        del _wa_user_state[wa_id]
+        return None
+    return state
+
+def _clear_user_state(wa_id: str):
+    """مسح حالة المستخدم"""
+    _wa_user_state.pop(wa_id, None)
+
 # URL cache for multi-quality downloads (like Telegram's _url_cache)
 import hashlib as _hashlib_mod
 _url_cache = {}  # {key: {"url": str, "expires": float}}
@@ -2165,21 +2202,39 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
                 "rows": [
                     {"id": "cmd_chat", "title": "🤖 المحادثة", "description": "تحدث مع AI"},
                     {"id": "cmd_news", "title": "📰 الأخبار", "description": "أخبار AI لحظة بلحظة"},
-                    {"id": "cmd_download", "title": "📥 تحميل فيديو", "description": "تحميل من يوتيوب"},
+                    {"id": "cmd_download", "title": "📥 تحميل فيديو", "description": "تحميل من يوتيوب وتيك توك"},
                     {"id": "video_search", "title": "🎬 فيديو بالبحث", "description": "ابحث وحمّل فيديو"},
                     {"id": "audio_search", "title": "🎵 صوت بالبحث", "description": "ابحث وحمّل صوت"},
                     {"id": "photo_search", "title": "🖼️ بحث صور", "description": "ابحث عن صور"},
                     {"id": "cmd_search", "title": "🔍 بحث الويب", "description": "ابحث في الإنترنت"},
+                ],
+            }, {
+                "title": "📚 التعلم والدراسة",
+                "rows": [
                     {"id": "cmd_study", "title": "📚 وضع الدراسة", "description": "ادرس واختبر نفسك"},
                     {"id": "cmd_memory", "title": "🧠 ذاكرتي", "description": "عرض وإدارة الذاكرة"},
-                    {"id": "cmd_image_gen", "title": "🎨 إنشاء صورة ⭐", "description": "Premium"},
-                    {"id": "cmd_image_edit", "title": "🖌️ تعديل صورة ⭐", "description": "Premium"},
+                ],
+            }, {
+                "title": "🎨 الوسائط والصور ⭐",
+                "rows": [
+                    {"id": "cmd_image_gen", "title": "🎨 إنشاء صورة", "description": "Premium — صور من وصف"},
+                    {"id": "cmd_image_edit", "title": "🖌️ تعديل صورة", "description": "Premium — عدّل صورة بالوصف"},
+                ],
+            }, {
+                "title": "📄 المستندات واليوتيوب",
+                "rows": [
+                    {"id": "cmd_youtube", "title": "📺 ملخص يوتيوب", "description": "ملخص فيديو يوتيوب"},
+                    {"id": "cmd_pdf", "title": "📄 تحليل PDF", "description": "ابعت PDF واسأل عنه"},
+                ],
+            }, {
+                "title": "⚙️ الإعدادات",
+                "rows": [
                     {"id": "cmd_settings", "title": "⚙️ الإعدادات", "description": "تغيير اللغة والإشعارات"},
                     {"id": "cmd_plan", "title": "📋 الخطة وحدودي", "description": "عرض خطتك واستخدامك"},
                 ] + admin_row,
             }],
             header_text="🤖 My Bro",
-            footer_text="v9.15 — مساعدك الذكي",
+            footer_text="v9.20 — مساعدك الذكي",
         )
 
     # ══════════════════════════════════════
@@ -2787,30 +2842,33 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
     # ══════════════════════════════════════
 
     elif command == "video_search":
+        # 🔴 حفظ حالة المستخدم — في انتظار كلمات البحث
+        _set_user_state(wa_id, "video_search_query", {"step": "awaiting_query"})
         await _send_whatsapp_message(wa_id,
             "🎬 *تحميل فيديو بالبحث*\n\n"
-            "اكتب اللي عايز تبحث عنه:\n"
-            "/video كلمات البحث\n\n"
-            "مثال: /video اغاني رمضان\n\n"
-            "هبحثلك في YouTube وهعرضلك 5 نتائج تختار منهم!")
+            "اكتب اللي عايز تبحث عنه وأنا هجيبلوك النتائج!\n\n"
+            "مثال: اغاني رمضان\n\n"
+            "💡 أو استخدم: /video كلمات البحث")
         return True
 
     elif command == "audio_search":
+        # 🔴 حفظ حالة المستخدم — في انتظار كلمات البحث
+        _set_user_state(wa_id, "audio_search_query", {"step": "awaiting_query"})
         await _send_whatsapp_message(wa_id,
             "🎵 *تحميل صوت بالبحث*\n\n"
-            "اكتب اللي عايز تبحث عنه:\n"
-            "/audio كلمات البحث\n\n"
-            "مثال: /audio قرآن عبد الباسط\n\n"
-            "هبحثلك في YouTube وهعرضلك 5 نتائج وهحمللك الصوت بس!")
+            "اكتب اللي عايز تبحث عنه وأنا هجيبلوك النتائج!\n\n"
+            "مثال: قرآن عبد الباسط\n\n"
+            "💡 أو استخدم: /audio كلمات البحث")
         return True
 
     elif command == "photo_search":
+        # 🔴 حفظ حالة المستخدم — في انتظار كلمات البحث
+        _set_user_state(wa_id, "photo_search_query", {"step": "awaiting_query"})
         await _send_whatsapp_message(wa_id,
             "🖼️ *بحث عن صور*\n\n"
-            "اكتب اللي عايز تبحث عنه:\n"
-            "/photo كلمات البحث\n\n"
-            "مثال: /photo محمد صلاح\n\n"
-            "هبحثلك عن صور وهسيبك تختار عددهم!")
+            "اكتب اللي عايز تبحث عنه وأنا هجيبلوك صور!\n\n"
+            "مثال: محمد صلاح\n\n"
+            "💡 أو استخدم: /photo كلمات البحث")
         return True
 
     # ══════════════════════════════════════
@@ -3420,6 +3478,135 @@ async def _handle_incoming_message(message: dict, value: dict):
         if message_type in ("reaction", "sticker", "contacts", "order", "location"):
             return
 
+        # ═══ الأولوية الأولى: Workflow النشط ═══
+        # لو المستخدم في وسط عملية تفاعلية (بحث صور، تعديل صورة، الخ)
+        # الرسالة بتروح للخدمة المسؤولة مش للذكاء الاصطناعي
+        active_state = _get_user_state(wa_id)
+        if active_state and message_type == "text" and content.strip():
+            flow = active_state.get("flow", "")
+            state_data = active_state.get("data", {})
+            
+            # 🔴 لو المستخدم عايز يلغي — أي كلمة إلغاء
+            cancel_words = ["إلغاء", "الغاء", "cancel", "خلاص", "لا", "ابقى لا", "امسح"]
+            if content.strip().lower() in cancel_words:
+                _clear_user_state(wa_id)
+                await _send_whatsapp_message(wa_id, "✅ تم إلغاء العملية.")
+                return
+            
+            if flow == "photo_search":
+                # المستخدم بيرد على "كم صورة تريد؟"
+                query = state_data.get("query", "")
+                cache_key = state_data.get("cache_key", "")
+                # محاولة استخراج رقم من الرسالة
+                import re as _re_num
+                num_match = _re_num.search(r'\d+', content.strip())
+                if num_match:
+                    count = int(num_match.group())
+                    # أقصى 20 صورة
+                    count = min(count, 20)
+                    if count < 1:
+                        count = 3
+                    logger.info(f"📸 Photo search workflow: user wants {count} images for '{query}'")
+                    _clear_user_state(wa_id)
+                    # كمل البحث بالعدد المحدد
+                    await _execute_photo_search(wa_id, query, count, wa_user_id, contact_name, message_id, is_admin, cache_key)
+                    return
+                else:
+                    # مش رقم — ممكن المستخدم كتب حاجة تانية
+                    await _send_whatsapp_message(wa_id, "📝 اكتب رقم (مثلاً: 3 أو 5 أو 10) أو اضغط إلغاء.")
+                    return
+            
+            elif flow == "image_edit":
+                # المستخدم بيرد بوصف التعديل بعد ما بعت صورة
+                cached_image = _wa_user_edit_images.get(wa_user_id, {})
+                if cached_image and cached_image.get("image_base64"):
+                    edit_prompt = content.strip()
+                    logger.info(f"🖌️ Image edit workflow: user says '{edit_prompt[:50]}'")
+                    _clear_user_state(wa_id)
+                    # كمل تعديل الصورة
+                    await _edit_and_send_image(wa_id, cached_image["image_base64"], edit_prompt, wa_user_id, contact_name, message_id, is_admin)
+                    return
+                else:
+                    _clear_user_state(wa_id)
+                    await _send_whatsapp_message(wa_id, "⚠️ الصورة انتهت صلاحيتها. ابعت صورة تانية وحاول تاني.")
+                    return
+            
+            elif flow == "video_search":
+                # المستخدم يكتب رقم الفيديو من النتائج
+                cache_key = state_data.get("cache_key", "")
+                cached = _wa_search_cache.get(cache_key)
+                if cached and cached.get("results"):
+                    num_match = __import__('re').search(r'\d+', content.strip())
+                    if num_match:
+                        idx = int(num_match.group()) - 1  # المستخدم بيكتب 1-5 ونحوله لـ 0-4
+                        if 0 <= idx < len(cached["results"]):
+                            r = cached["results"][idx]
+                            logger.info(f"🎬 Video search workflow: user selected #{idx+1}")
+                            _clear_user_state(wa_id)
+                            await _send_whatsapp_message(wa_id, f"🎬 جاري تحميل الفيديو...\n\n📺 {r['title']}")
+                            await _wa_download_youtube(wa_id, r['url'], wa_user_id, contact_name, message_id, is_admin, format="720")
+                            return
+                    # مش رقم صحيح
+                    await _send_whatsapp_message(wa_id, "📝 اكتب رقم الفيديو (1-5) من القائمة أو اضغط إلغاء.")
+                    return
+                else:
+                    _clear_user_state(wa_id)
+                    await _send_whatsapp_message(wa_id, "❌ انتهت صلاحية النتائج! ابحث تاني.")
+                    return
+            
+            elif flow == "audio_search":
+                # نفس video_search بس صوت
+                cache_key = state_data.get("cache_key", "")
+                cached = _wa_search_cache.get(cache_key)
+                if cached and cached.get("results"):
+                    num_match = __import__('re').search(r'\d+', content.strip())
+                    if num_match:
+                        idx = int(num_match.group()) - 1
+                        if 0 <= idx < len(cached["results"]):
+                            r = cached["results"][idx]
+                            logger.info(f"🎵 Audio search workflow: user selected #{idx+1}")
+                            _clear_user_state(wa_id)
+                            await _send_whatsapp_message(wa_id, f"🎵 جاري تحميل الصوت...\n\n📺 {r['title']}")
+                            await _wa_download_youtube(wa_id, r['url'], wa_user_id, contact_name, message_id, is_admin, format="mp3")
+                            return
+                    await _send_whatsapp_message(wa_id, "📝 اكتب رقم الصوت (1-5) من القائمة أو اضغط إلغاء.")
+                    return
+                else:
+                    _clear_user_state(wa_id)
+                    await _send_whatsapp_message(wa_id, "❌ انتهت صلاحية النتائج! ابحث تاني.")
+                    return
+            
+            elif flow == "video_search_query":
+                # المستخدم كتب كلمات البحث بعد ما ضغط "فيديو بالبحث"
+                query = content.strip()
+                logger.info(f"🎬 Video search query workflow: user typed '{query[:50]}'")
+                _clear_user_state(wa_id)
+                await _handle_wa_video_search(wa_id, query, wa_user_id, contact_name, message_id, is_admin)
+                # حفظ حالة انتظار اختيار الفيديو
+                cache_key = hashlib.md5(f"wa_vs_{wa_id}_{query}".encode()).hexdigest()[:12]
+                _set_user_state(wa_id, "video_search", {"cache_key": cache_key})
+                return
+            
+            elif flow == "audio_search_query":
+                # المستخدم كتب كلمات البحث بعد ما ضغط "صوت بالبحث"
+                query = content.strip()
+                logger.info(f"🎵 Audio search query workflow: user typed '{query[:50]}'")
+                _clear_user_state(wa_id)
+                await _handle_wa_audio_search(wa_id, query, wa_user_id, contact_name, message_id, is_admin)
+                # حفظ حالة انتظار اختيار الصوت
+                cache_key = hashlib.md5(f"wa_as_{wa_id}_{query}".encode()).hexdigest()[:12]
+                _set_user_state(wa_id, "audio_search", {"cache_key": cache_key})
+                return
+            
+            elif flow == "photo_search_query":
+                # المستخدم كتب كلمات البحث بعد ما ضغط "بحث صور"
+                query = content.strip()
+                logger.info(f"🖼️ Photo search query workflow: user typed '{query[:50]}'")
+                _clear_user_state(wa_id)
+                # نوجهه لـ photo search اللي هيبدأ الـ workflow
+                await _handle_command_with_arg(wa_id, "photo_search_query", query, wa_user_id, contact_name, message_id, is_admin)
+                return
+
         # ═══ Handle Interactive Button/List Replies ═══
         if interactive_id:
             # Check for download quality selections first (dl_v_b_KEY, dl_v_m_KEY, etc.)
@@ -3538,6 +3725,10 @@ async def _handle_incoming_message(message: dict, value: dict):
                 # Image gen/edit
                 "cmd_image_gen": "image_gen",
                 "cmd_image_edit": "image_edit",
+                # 🔴 إصلاح: أضفنا أزرار البحث اللي كانت مكسورة
+                "video_search": "video_search",
+                "audio_search": "audio_search",
+                "photo_search": "photo_search",
             }
             cmd = command_map.get(interactive_id)
             if cmd:
@@ -3762,6 +3953,9 @@ async def _handle_incoming_message(message: dict, value: dict):
                             {"id": "cmd_image_edit", "title": "🖌️ عدّلها"},
                             {"id": "cmd_commands", "title": "📋 الأوامر"},
                         ])
+                    
+                    # 🔴 حفظ حالة المستخدم — لو كتب وصف تعديل يروح للخدمة مش AI
+                    _set_user_state(wa_id, "image_edit", {"step": "awaiting_edit_prompt"})
                 else:
                     await _send_whatsapp_message(wa_id, "⚠️ مش قادر أحلل الصورة دي. جرب صورة تانية! 👁️")
                     await feedback.error()
@@ -4540,7 +4734,7 @@ async def _handle_wa_audio_search(wa_id: str, query: str, wa_user_id: int,
 async def _handle_wa_photo_search(wa_id: str, query: str, wa_user_id: int,
                                    contact_name: str, message_id: str, is_admin: bool):
     """بحث صور + اختيار عدد + إرسال عبر WhatsApp"""
-    # سؤال المستخدم عن عدد الصور
+    # حفظ الاستعلام في cache
     cache_key = hashlib.md5(f"wa_ph_{wa_id}_{query}".encode()).hexdigest()[:12]
     _wa_search_cache[cache_key] = {
         "query": query,
@@ -4549,13 +4743,61 @@ async def _handle_wa_photo_search(wa_id: str, query: str, wa_user_id: int,
         "created_at": time.time(),
     }
     
-    text = f"🖼️ *بحث عن صور: {query}*\n━━━━━━━━━━━━━━━━━\n\nكم صورة تريد؟"
+    # 🔴 حفظ حالة المستخدم — في انتظار عدد الصور
+    _set_user_state(wa_id, "photo_search", {"query": query, "cache_key": cache_key})
+    
+    text = f"🖼️ *بحث عن صور: {query}*\n━━━━━━━━━━━━━━━━━\n\nكم صورة تريد؟\n\n💡 ممكن تكتب رقم أو تختار من الأزرار:"
     
     await _send_interactive_buttons(wa_id, text, [
         {"id": f"wa_ph_{cache_key}_3", "title": "3 صور"},
         {"id": f"wa_ph_{cache_key}_5", "title": "5 صور"},
         {"id": f"wa_ph_{cache_key}_10", "title": "10 صور"},
     ])
+
+
+async def _execute_photo_search(wa_id: str, query: str, count: int, wa_user_id: int,
+                                 contact_name: str, message_id: str, is_admin: bool,
+                                 cache_key: str = ""):
+    """تنفيذ بحث الصور بعد ما المستخدم حدد العدد"""
+    await _send_whatsapp_message(wa_id, f"🖼️ جاري البحث عن {count} صور لـ: {query}...")
+    
+    try:
+        from image_search import search_images, download_images
+        
+        results = await search_images(query, count=count)
+        
+        if not results:
+            await _send_whatsapp_message(wa_id, "❌ مفيش صور! جرب كلمات بحث تانية.")
+            return
+        
+        image_urls = [r["url"] for r in results[:count]]
+        images = await download_images(image_urls)
+        
+        if not images:
+            await _send_whatsapp_message(wa_id, "❌ فشل تحميل الصور. جرب تاني!")
+            return
+        
+        # إرسال الصور واحدة واحدة
+        sent = 0
+        for i, img_bytes in enumerate(images):
+            try:
+                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                caption = ""
+                if i == 0:
+                    caption = f"🖼️ صور لـ: {query}\n📸 {i+1}/{len(images)}"
+                
+                await _send_whatsapp_image(wa_id, img_b64, caption)
+                sent += 1
+                if i < len(images) - 1:
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"Failed to send image {i}: {e}")
+        
+        await _send_whatsapp_message(wa_id, f"✅ تم إرسال {sent}/{len(images)} صورة!")
+        
+    except Exception as e:
+        logger.error(f"WA photo search error: {e}")
+        await _send_whatsapp_message(wa_id, "❌ حصل خطأ. جرب تاني!")
 
 
 async def _handle_wa_search_callback(wa_id: str, callback_id: str, wa_user_id: int,
@@ -4612,6 +4854,9 @@ async def _handle_wa_search_callback(wa_id: str, callback_id: str, wa_user_id: i
             count = int(parts[3])
         except ValueError:
             return
+        
+        # 🔴 مسح حالة المستخدم لأنه اختار من الأزرار
+        _clear_user_state(wa_id)
         
         cached = _wa_search_cache.get(cache_key)
         if not cached or not cached.get("query"):
