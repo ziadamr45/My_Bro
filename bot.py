@@ -452,12 +452,18 @@ def main():
     
     # 🔴 FIX: حذف أي webhook نشط قبل البدء — ده بيمنع خطأ 409 Conflict
     # اللي بيحصل لما بوتين (القديم والجديد) بيحاولوا يشتغلوا في نفس الوقت
+    # بنستخدم HTTP request مباشرة عشان منعملش مشكلة للـ event loop بتاع python-telegram-bot
     try:
-        import asyncio as _aio
-        loop = _aio.new_event_loop()
-        loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
-        loop.close()
-        logger.info("✅ Deleted any active webhook before polling")
+        import urllib.request
+        import json as _json
+        webhook_api = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+        req = urllib.request.Request(webhook_api)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read().decode())
+            if result.get('ok'):
+                logger.info("✅ Deleted any active webhook before polling (via HTTP)")
+            else:
+                logger.warning(f"⚠️ deleteWebhook response: {result}")
     except Exception as e:
         logger.warning(f"⚠️ Could not delete webhook before polling: {e}")
     
