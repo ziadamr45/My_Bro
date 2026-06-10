@@ -4321,15 +4321,25 @@ async def _wa_download_youtube(wa_id: str, url: str, wa_user_id: int,
         await _download_and_send_video(wa_id, url, wa_user_id, contact_name, message_id, is_admin, force_audio=force_audio)
         return
     
-    # ═══ YouTube: استخدم RapidAPI ═══
+    # ═══ YouTube: استخدم RapidAPI مع fallback لـ yt-dlp ═══
     is_audio = (format == "mp3")
+    rapidapi_failed = False
     
     try:
         await _send_whatsapp_message(wa_id, 
             f"{'🎵' if is_audio else '🎬'} جاري التحميل عبر الخدمة الخارجية..."
         )
         
-        result = await download_youtube_file_async(url, format=format, output_dir="/tmp")
+        # 🔴 timeout 90 ثانية — لو الخدمة بطيئة نروح yt-dlp
+        try:
+            result = await asyncio.wait_for(
+                download_youtube_file_async(url, format=format, output_dir="/tmp"),
+                timeout=90
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⚠️ YouTube RapidAPI timed out after 90s, falling back to yt-dlp")
+            rapidapi_failed = True
+            result = None
         
         if result and result.get("success") and result.get("file_path"):
             file_path = result["file_path"]
@@ -4340,71 +4350,90 @@ async def _wa_download_youtube(wa_id: str, url: str, wa_user_id: int,
             if not is_audio and file_size > 64 * 1024 * 1024:
                 _cleanup_wa_file(file_path)
                 await _send_whatsapp_message(wa_id, "🎬 الملف كبير، بجرب جودة أقل...")
-                result = await download_youtube_file_async(url, format="360", output_dir="/tmp")
+                try:
+                    result = await asyncio.wait_for(
+                        download_youtube_file_async(url, format="360", output_dir="/tmp"),
+                        timeout=60
+                    )
+                except asyncio.TimeoutError:
+                    result = None
+                    
                 if result and result.get("success") and result.get("file_path"):
                     file_path = result["file_path"]
                     file_size = result.get("file_size", 0)
                     real_title = result.get("title", "فيديو YouTube")
                 else:
-                    error_code = result.get("error", "unknown") if result else "unknown"
-                    error_msg = get_error_message(error_code, "ar")
-                    await _send_whatsapp_message(wa_id, error_msg)
-                    return
+                    # حتى الجودة الأقل فشلت — fallback لـ yt-dlp
+                    logger.warning("⚠️ RapidAPI failed for lower quality too, falling back to yt-dlp")
+                    rapidapi_failed = True
             
-            # إرسال الملف عبر WhatsApp
-            try:
-                with open(file_path, 'rb') as f:
-                    file_data = f.read()
-                
-                if is_audio:
-                    # إرسال كصوت
-                    await _send_whatsapp_audio(wa_id, file_data, title=real_title[:64])
-                else:
-                    # إرسال كفيديو/مستند
-                    ext = "mp4"
-                    filename = f"{real_title[:50]}.{ext}"
-                    await _send_whatsapp_document(wa_id, file_data, filename, caption=f"🎬 {real_title}", content_type="video/mp4")
-                
-                await _send_whatsapp_message(wa_id, 
-                    f"✅ تم إرسال ال{'صوت' if is_audio else 'فيديو'}!"
-                )
-                
-                # تحديث الاستخدام
+            if not rapidapi_failed:
+                # إرسال الملف عبر WhatsApp
                 try:
-                    increment_usage(wa_user_id, "youtube_summaries")
-                except Exception:
-                    pass
-                
-            except Exception as e:
-                logger.error(f"WA send YouTube media error: {e}")
-                
-                # لو فشل الإرسال، نبعت الرابط كبديل
-                download_url = result.get("download_url", "")
-                if download_url:
+                    with open(file_path, 'rb') as f:
+                        file_data = f.read()
+                    
+                    if is_audio:
+                        # إرسال كصوت
+                        await _send_whatsapp_audio(wa_id, file_data, title=real_title[:64])
+                    else:
+                        # إرسال كفيديو/مستند
+                        ext = "mp4"
+                        filename = f"{real_title[:50]}.{ext}"
+                        await _send_whatsapp_document(wa_id, file_data, filename, caption=f"🎬 {real_title}", content_type="video/mp4")
+                    
                     await _send_whatsapp_message(wa_id, 
-                        f"⚠️ حجم الملف كبير عشان نبعتو على واتساب.\n\n"
-                        f"🔗 رابط التحميل المباشر:\n{download_url}\n\n"
-                        f"🎬 {real_title}"
+                        f"✅ تم إرسال ال{'صوت' if is_audio else 'فيديو'}!"
                     )
-                else:
-                    await _send_whatsapp_message(wa_id, 
-                        f"❌ فشل إرسال ال{'صوت' if is_audio else 'فيديو'}. جرب تاني!"
-                    )
-            finally:
-                _cleanup_wa_file(file_path)
-            
-            return
+                    
+                    # تحديث الاستخدام
+                    try:
+                        increment_usage(wa_user_id, "youtube_summaries")
+                    except Exception:
+                        pass
+                    
+                except Exception as e:
+                    logger.error(f"WA send YouTube media error: {e}")
+                    
+                    # لو فشل الإرسال، نبعت الرابط كبديل
+                    download_url = result.get("download_url", "") if result else ""
+                    if download_url:
+                        await _send_whatsapp_message(wa_id, 
+                            f"⚠️ حجم الملف كبير عشان نبعتو على واتساب.\n\n"
+                            f"🔗 رابط التحميل المباشر:\n{download_url}\n\n"
+                            f"🎬 {real_title}"
+                        )
+                    else:
+                        # فشل الإرسال ومفيش رابط — نجرب yt-dlp
+                        rapidapi_failed = True
+                finally:
+                    _cleanup_wa_file(file_path)
+                
+                if not rapidapi_failed:
+                    return
         
-        else:
-            # RapidAPI فشلت
+        # ═══ RapidAPI فشلت أو علّقت → fallback لـ yt-dlp ═══
+        if not rapidapi_failed:
             error_code = result.get("error", "unknown") if result else "unknown"
-            error_msg = get_error_message(error_code, "ar")
-            await _send_whatsapp_message(wa_id, error_msg)
-            return
+            logger.warning(f"⚠️ YouTube RapidAPI failed ({error_code}), falling back to yt-dlp")
+        
+        await _send_whatsapp_message(wa_id, 
+            "⚠️ الخدمة الخارجية فشلت، بجرب طريقة بديلة..."
+        )
+        force_audio = is_audio
+        quality_map = {"1080": "best", "720": "medium", "360": "low", "mp3": "audio"}
+        yt_quality = quality_map.get(format, "medium")
+        await _download_and_send_video(wa_id, url, wa_user_id, contact_name, message_id, is_admin, quality=yt_quality, force_audio=force_audio)
+        return
     
     except Exception as e:
         logger.error(f"WA YouTube RapidAPI error: {e}")
-        await _send_whatsapp_message(wa_id, "❌ حصل خطأ في التحميل. جرب تاني!")
+        # fallback لـ yt-dlp
+        await _send_whatsapp_message(wa_id, "⚠️ حصل خطأ، بجرب طريقة بديلة...")
+        force_audio = is_audio
+        quality_map = {"1080": "best", "720": "medium", "360": "low", "mp3": "audio"}
+        yt_quality = quality_map.get(format, "medium")
+        await _download_and_send_video(wa_id, url, wa_user_id, contact_name, message_id, is_admin, quality=yt_quality, force_audio=force_audio)
 
 
 def _cleanup_wa_file(file_path: str):

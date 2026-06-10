@@ -960,7 +960,15 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                 except:
                     pass
                 
-                rapidapi_result = await download_youtube_file_async(url, format=yt_format, output_dir=tmpdir)
+                # 🔴 timeout 90 ثانية — لو الخدمة بطيئة نروح yt-dlp
+                try:
+                    rapidapi_result = await asyncio.wait_for(
+                        download_youtube_file_async(url, format=yt_format, output_dir=tmpdir),
+                        timeout=90
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ YouTube RapidAPI timed out after 90s, falling back to yt-dlp")
+                    rapidapi_result = None
                 
                 if rapidapi_result and rapidapi_result.get("success") and rapidapi_result.get("file_path"):
                     logger.info(f"🟢 YouTube RapidAPI succeeded! File: {rapidapi_result['file_path']}")
