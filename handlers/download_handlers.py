@@ -559,64 +559,96 @@ async def _threads_download_media(parsed: dict, tmpdir: str, headers: dict, qual
 async def _threads_rapidapi_download(url: str, tmpdir: str, headers: dict, quality: str = "best") -> dict | None:
     """تحميل من Threads عبر RapidAPI — fallback أخير
     
-    بنستخدم أقوى خدمة متاحة: threads-downloader
+    Endpoint: POST https://threads-downloader.p.rapidapi.com/v1/threads/download
+    Body: {"url": "https://www.threads.net/@user/post/CODE"}
+    
+    Response expected:
+    - success: true/false
+    - data.medias[] — قائمة بروابط التحميل
+    - data.medias[].url — رابط الميديا
+    - data.medias[].type — "video" أو "image"
+    - data.caption — نص البوست
     """
     import aiohttp
+    import json as _json
     
     try:
         from config import RAPIDAPI_KEY
         
-        api_url = "https://threads-downloader.p.rapidapi.com/download"
+        api_url = "https://threads-downloader.p.rapidapi.com/v1/threads/download"
         
         api_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
             "x-rapidapi-key": RAPIDAPI_KEY,
             "x-rapidapi-host": "threads-downloader.p.rapidapi.com",
         }
         
-        params = {"url": url}
+        payload = {"url": url}
         
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=api_headers, params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            async with session.post(api_url, headers=api_headers, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"🧵 Threads: RapidAPI returned status {resp.status}")
+                    resp_text = await resp.text()
+                    logger.warning(f"🧵 Threads: RapidAPI returned status {resp.status}: {resp_text[:200]}")
                     return None
                 
                 data = await resp.json()
                 
-                # استخراج رابط التحميل من الرد
-                # الهيكل الممكن: data.video_urls أو data.download_url أو data.url
+                # 🔴 نتأكد إن الـ API رجع success
+                if not data.get("success", True):
+                    logger.warning(f"🧵 Threads: RapidAPI error: {data.get('message', 'Unknown error')}")
+                    return None
+                
+                # 🔴 استخراج بيانات الميديا من الرد
+                # الهيكل الممكن:
+                # 1. data.medias[] — قائمة بروابط التحميل
+                # 2. data.video_url / data.image_url — رابط واحد
+                # 3. data.download_url — رابط واحد
                 download_url = None
                 is_video = True
                 title = "Threads Post"
                 
-                if isinstance(data, dict):
-                    # بنبحث في عدة هيكلية ممكنة
-                    inner = data.get("data", data)
-                    
-                    # فيديو
+                inner = data.get("data", data)
+                
+                # 🔴 الطريقة 1: medias array (الأحدث)
+                medias = inner.get("medias", [])
+                if isinstance(medias, list) and len(medias) > 0:
+                    first_media = medias[0] if isinstance(medias[0], dict) else {}
+                    download_url = first_media.get("url") or first_media.get("download_url")
+                    media_type = first_media.get("type", "").lower()
+                    is_video = media_type == "video" or first_media.get("is_video", True)
+                    logger.info(f"🧵 Threads: RapidAPI medias[0] type={media_type}")
+                
+                # 🔴 الطريقة 2: video_url / image_url مباشرة
+                if not download_url:
                     download_url = (
                         inner.get("video_url") or
                         inner.get("download_url") or
-                        inner.get("url") or
-                        inner.get("video_urls", [{}])[0].get("url") if isinstance(inner.get("video_urls"), list) else None
+                        inner.get("url")
                     )
-                    
                     if not download_url:
-                        # صورة
-                        download_url = (
-                            inner.get("image_url") or
-                            inner.get("thumbnail_url") or
-                            inner.get("images", [{}])[0].get("url") if isinstance(inner.get("images"), list) else None
-                        )
-                        is_video = False
-                    
-                    title = inner.get("title", inner.get("caption", "Threads Post"))
+                        download_url = inner.get("image_url") or inner.get("thumbnail_url")
+                        if download_url:
+                            is_video = False
+                
+                # 🔴 الطريقة 3: video_urls array
+                if not download_url:
+                    video_urls = inner.get("video_urls", [])
+                    if isinstance(video_urls, list) and len(video_urls) > 0:
+                        first = video_urls[0]
+                        download_url = first.get("url") if isinstance(first, dict) else first
+                
+                # 🔴 العنوان
+                title = inner.get("caption") or inner.get("title") or inner.get("text") or "Threads Post"
                 
                 if not download_url:
-                    logger.warning("🧵 Threads: RapidAPI returned no download URL")
+                    logger.warning(f"🧵 Threads: RapidAPI returned no download URL. Response: {str(data)[:300]}")
                     return None
                 
-                # تحميل الملف
+                logger.info(f"🧵 Threads: RapidAPI got download URL — is_video={is_video}")
+                
+                # 🔴 تحميل الملف
                 dl_headers = dict(headers)
                 dl_headers['Referer'] = 'https://www.threads.net/'
                 
