@@ -1133,14 +1133,15 @@ async def _show_quality_selection(wa_id: str, url: str, wa_user_id: int,
 async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                      contact_name: str, message_id: str = "", is_admin: bool = False,
                                      quality: str = "best", force_audio: bool = False):
-    """Download a video and send it via WhatsApp — with Invidious + Cobalt + yt-dlp fallback chain
+    """Download a video and send it via WhatsApp — with yt-dlp FIRST then fallbacks
     
-    🔴 Fallback chain:
-    0. 🟣 Invidious API (أول طبقة لليوتيوب — مش بتتأثر بـ bot detection)
-    1. 🔵 Cobalt Self-Hosted (سيرفر منفصل)
-    2. yt-dlp default
-    3. yt-dlp android client
-    4. Cloudflare Worker proxy
+    🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+    1. yt-dlp + deno + remote_components (الأفضل)
+    2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
+    3. Cobalt Public API (fallback)
+    4. Invidious API (fallback)
+    5. Cobalt Self-Hosted (fallback)
+    6. Cloudflare Worker proxy (آخر محاولة)
     
     WhatsApp has a 100MB media size limit. For larger files, we send the download link instead.
     
@@ -1172,238 +1173,14 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         tmpdir = tempfile.mkdtemp(prefix="mybro_wa_dl_")
         output_template = os.path.join(tmpdir, "%(title).80s.%(ext)s")
         
-        # ═══ المرحلة -1: Cobalt Public API (لليوتيوب بس — الأولوية القصوى!) ═══
-        # 🟠 أي رابط يوتيوب → نستخدم Cobalt Public API بدل yt-dlp
-        # ده أسرع وأضمن لأن yt-dlp بيتحجب باستمرار من YouTube
-        cobalt_public_result = None
+        # ═══════════════════════════════════════════════════════════════
+        # 🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+        # نفس ترتيب التليجرام بالظبط
+        # ═══════════════════════════════════════════════════════════════
         
-        if is_youtube:
-            try:
-                from handlers.download_handlers import _try_cobalt_for_youtube
-                
-                logger.info(f"🟠 Cobalt Public (WhatsApp): YouTube detected — using Cobalt Public API")
-                
-                try:
-                    await _send_whatsapp_message(wa_id, "🟠 جاري التحميل عبر Cobalt...")
-                except:
-                    pass
-                
-                cobalt_public_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
-                
-                if cobalt_public_result and cobalt_public_result.get("filepath"):
-                    logger.info(f"🟠 Cobalt Public (WhatsApp) succeeded!")
-                    
-                    file_path = cobalt_public_result["filepath"]
-                    file_size = cobalt_public_result.get("size", os.path.getsize(file_path))
-                    video_title = cobalt_public_result.get("title", "YouTube Video")
-                    video_height = cobalt_public_result.get("height", 720)
-                    is_audio = (quality == "audio")
-                    
-                    size_mb = file_size / (1024 * 1024)
-                    size_str = f"{size_mb:.1f}MB"
-                    
-                    # تتبع الاستخدام
-                    try:
-                        from premium import increment_usage
-                        increment_usage(wa_user_id, "downloads")
-                    except:
-                        pass
-                    try:
-                        from dashboard import track_event
-                        track_event("whatsapp_media_downloads", platform="whatsapp")
-                    except: pass
-                    
-                    # WhatsApp limit
-                    if file_size > 100 * 1024 * 1024:
-                        await _send_whatsapp_message(wa_id, f"⚠️ الملف كبير ({size_str}) — أكبر من حد واتساب (100MB)")
-                    else:
-                        # إرسال الملف عبر واتساب
-                        with open(file_path, 'rb') as f:
-                            file_data = f.read()
-                        
-                        if is_audio:
-                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', video_title)[:50] + '.mp3'
-                            await _send_whatsapp_audio(wa_id, file_data, safe_filename)
-                        else:
-                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', video_title)[:50] + '.mp4'
-                            content_type = "video/mp4"
-                            caption = f"📥 {video_title[:200]}\n📊 {video_height}p | {size_str} | Cobalt"
-                            await _send_whatsapp_document(wa_id, file_data, safe_filename, content_type, caption)
-                    
-                    # تنظيف
-                    try: os.remove(file_path)
-                    except: pass
-                    try: shutil.rmtree(tmpdir, ignore_errors=True)
-                    except: pass
-                    
-                    await feedback.stop()
-                    return  # ✅ Cobalt Public نجح!
-                
-                else:
-                    logger.warning(f"⚠️ Cobalt Public (WhatsApp) failed, falling back to Invidious/yt-dlp...")
-                    cobalt_public_result = None
-                    
-            except Exception as cp_err:
-                logger.warning(f"⚠️ Cobalt Public (WhatsApp) error: {cp_err}, falling back to Invidious/yt-dlp...")
-                cobalt_public_result = None
-        
-        # ═══ المرحلة -0.5: Invidious API (طبقة إضافية لليوتيوب!) ═══
-        # 🟣 Invidious: واجهة بديلة لليوتيوب — مجانية ومفتوحة
-        # الميزة الرئيسية: مش بتتأثر بـ YouTube bot detection خالص
-        # الطلبات بتروح لسيرفرات Invidious مش من الـ IP بتاعك
-        invidious_result = None
-        is_youtube = platform.lower() == "youtube"
-        
-        if is_youtube:
-            try:
-                from invidious_api import download_youtube_invidious_file
-                
-                # تحويل جودة الواتساب لجودة Invidious
-                inv_quality_map = {
-                    "best": "best",
-                    "medium": "medium",
-                    "low": "low",
-                    "audio": "audio",
-                }
-                inv_quality = inv_quality_map.get(quality, "best")
-                
-                logger.info(f"🟣 Invidious (WhatsApp): Attempting download quality={inv_quality} for {url[:80]}")
-                
-                try:
-                    await _send_whatsapp_message(wa_id, "🟣 جاري التحميل عبر Invidious...")
-                except:
-                    pass
-                
-                # timeout 60 ثانية — لو Invidious بطيء نروح Cobalt/yt-dlp
-                try:
-                    invidious_result = await asyncio.wait_for(
-                        download_youtube_invidious_file(url, quality=inv_quality, output_dir=tmpdir),
-                        timeout=60
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Invidious (WhatsApp) timed out after 60s, falling back to Cobalt/yt-dlp")
-                    invidious_result = None
-                
-                if invidious_result and invidious_result.get("success") and invidious_result.get("file_path"):
-                    logger.info(f"🟣 Invidious (WhatsApp) succeeded! File: {invidious_result['file_path']}")
-                    
-                    file_path = invidious_result["file_path"]
-                    file_size = invidious_result.get("file_size", os.path.getsize(file_path))
-                    real_title = invidious_result.get("title", "YouTube Video")
-                    format_info = invidious_result.get("format_info", {})
-                    is_audio = (quality == "audio")
-                    
-                    # تحديد الجودة الحقيقية
-                    quality_label = format_info.get("quality_label", "") or format_info.get("resolution", "")
-                    if not quality_label:
-                        quality_label = "MP3" if is_audio else f"{inv_quality} quality"
-                    
-                    size_mb = file_size / (1024 * 1024)
-                    size_str = f"{size_mb:.1f}MB"
-                    
-                    # تتبع الاستخدام
-                    try:
-                        from premium import increment_usage
-                        increment_usage(wa_user_id, "downloads")
-                    except:
-                        pass
-                    try:
-                        from dashboard import track_event
-                        track_event("whatsapp_media_downloads", platform="whatsapp")
-                    except: pass
-                    
-                    # WhatsApp limit
-                    if file_size > 100 * 1024 * 1024:
-                        await _send_whatsapp_message(wa_id, f"⚠️ الملف كبير ({size_str}) — أكبر من حد واتساب (100MB)")
-                    else:
-                        # إرسال الملف عبر واتساب
-                        with open(file_path, 'rb') as f:
-                            file_data = f.read()
-                        
-                        if is_audio:
-                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', real_title)[:50] + '.mp3'
-                            await _send_whatsapp_audio(wa_id, file_data, safe_filename)
-                        else:
-                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', real_title)[:50] + '.mp4'
-                            content_type = "video/mp4"
-                            caption = f"📥 {real_title[:200]}\n📊 {quality_label} | {size_str} | Invidious"
-                            await _send_whatsapp_document(wa_id, file_data, safe_filename, caption, content_type)
-                    
-                    # تنظيف الملف
-                    try: os.remove(file_path)
-                    except: pass
-                    
-                    await feedback.complete()
-                    return  # ✅ Invidious نجح وخلاص!
-                
-                else:
-                    # Invidious فشل — نكمل بالطرق العادية
-                    error_code = invidious_result.get("error", "unknown") if invidious_result else "unknown"
-                    logger.warning(f"⚠️ Invidious (WhatsApp) failed ({error_code}), falling back to Cobalt/yt-dlp...")
-                    invidious_result = None
-                    
-            except ImportError:
-                logger.warning("⚠️ invidious_api module not available, skipping Invidious for WhatsApp")
-            except Exception as inv_err:
-                logger.warning(f"⚠️ Invidious (WhatsApp) error: {inv_err}, falling back to Cobalt/yt-dlp...")
-        
-        # ═══ المرحلة 0: Cobalt Self-Hosted ═══
-        # 🔵 طريقة تانية — بيشتغل على سيرفر منفصل ومش بيتأثر بـ bot detection
-        # 🔴 لو Invidious نجح — مش محتاجين Cobalt
-        cobalt_filepath = None
-        cobalt_filename = None
-        cobalt_filesize = 0
-        
-        try:
-            from handlers.download_handlers import _try_cobalt_download
-            # 🔴 لو Invidious نجح — مش محتاجين Cobalt
-            if not invidious_result:
-                cobalt_result = await _try_cobalt_download(url, quality, tmpdir)
-            else:
-                cobalt_result = None
-            if cobalt_result:
-                cobalt_filepath = cobalt_result["filepath"]
-                cobalt_filename = cobalt_result["filename"]
-                cobalt_filesize = cobalt_result["size"]
-                logger.info(f"🔵 Cobalt succeeded for WhatsApp! Size: {cobalt_filesize // (1024*1024)}MB")
-        except Exception as cobalt_err:
-            logger.warning(f"🔵 Cobalt failed for WhatsApp: {cobalt_err}")
-        
-        if cobalt_filepath and cobalt_filesize > 0:
-            # Cobalt نجح — نبعث الملف مباشرة بدون yt-dlp
-            try:
-                is_audio = (quality == "audio")
-                
-                # WhatsApp 100MB limit
-                if cobalt_filesize > 100 * 1024 * 1024:
-                    await _send_whatsapp_message(wa_id, f"⚠️ الملف كبير ({cobalt_filesize // (1024*1024)}MB) — أكبر من حد واتساب (100MB)")
-                else:
-                    # Send the media file via WhatsApp
-                    with open(cobalt_filepath, 'rb') as f:
-                        file_data = f.read()
-                    
-                    if is_audio:
-                        await _send_whatsapp_audio(wa_id, file_data, cobalt_filename)
-                    else:
-                        content_type = "video/mp4"
-                        await _send_whatsapp_document(wa_id, file_data, cobalt_filename, caption=f"📥 {cobalt_filename}", content_type=content_type)
-                
-                await feedback.complete()
-                try: track_event("whatsapp_media_downloads", platform="whatsapp")
-                except: pass
-                return
-                
-            except Exception as send_err:
-                logger.warning(f"⚠️ Failed to send Cobalt file via WhatsApp: {send_err}")
-                # Fall through to yt-dlp
-            finally:
-                # Clean up
-                try:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                except:
-                    pass
-        
-        # ═══ Cobalt فشل → نكمل بـ yt-dlp ═══
+        # ═══ المرحلة 1: yt-dlp + deno + remote_components (الأفضل!) ═══
+        # 🔴 الكوكيز الوهمية اتشالت — بنستخدم headers نظيفة فقط
+        # 🔴 بنستخدم cookies.txt لو موجود — الحل الأقوى
         
         try:
             # yt-dlp options — with multi-quality support (like Telegram)

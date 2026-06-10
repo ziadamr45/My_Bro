@@ -327,26 +327,13 @@ def _retrieve_url(key: str) -> str:
 
 
 # ═══════════════════════════════════════
-# YouTube Visitor Cookies — يساعد يتخطى الـ Bot Detection
+# 🔴 الكوكيز الوهمية اتشالت نهائياً!
+# الكوكيز الوهمية (visitor cookies) بتضر أكتر مما تنفع لأن:
+# 1. YouTube بيكتشف إنها random/generated وبيعتبرنا bot
+# 2. كل محاولة بتولد visitor_id مختلف = سلوك مش طبيعي
+# 3. yt-dlp بيدير كوكيز YouTube داخلياً حسب player_client
+# الحل الحقيقي: ملف cookies.txt حقيقي من المتصفح
 # ═══════════════════════════════════════
-
-def _generate_visitor_id() -> str:
-    """توليد VISITOR_INFO1_LIVE cookie — عشان YouTube يشوفنا كزائر حقيقي"""
-    chars = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(chars) for _ in range(11))
-
-
-def _get_youtube_cookies_header() -> str:
-    """توليد YouTube cookies header — visitor + consent + GPS"""
-    visitor_id = _generate_visitor_id()
-    cookies = [
-        f"VISITOR_INFO1_LIVE={visitor_id}",
-        "CONSENT=YES+cb.20210328-17-p0.en+FX+999",
-        "GPS=1",
-        "YSC=1",
-        "PREF=hl=en&tz=UTC",
-    ]
-    return "; ".join(cookies)
 
 
 # ═══════════════════════════════════════
@@ -1001,38 +988,26 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
     
     🔴 FIX v3: 
     - بنضيف cookies.txt لو موجود — الحل الأقوى لتخطي bot detection
-    - بنضيف YouTube visitor cookies في الـ HTTP headers
+    - 🔴 الكوكيز الوهمية اتشالت نهائياً — مش بتفيد وبتضر
     - بنستخدم player_client=mweb أولاً (أقل كشف) مع fallback لـ android → ios → tv → web
     - بنكشف ffmpeg تلقائي وبنعدل التنسيقات حسب التوفر
     """
     ffmpeg_ok = use_ffmpeg and _is_ffmpeg_available()
     
-    # 🔴 FIX v5: لا نضيف كوكيز وهمية لليوتيوب!
+    # 🔴 الكوكيز الوهمية اتشالت نهائياً!
     # الكوكيز الوهمية (visitor cookies) بتضر أكتر مما تنفع لأن:
     # 1. YouTube بيكتشف إنها random/generated وبيعتبرنا bot
     # 2. كل محاولة بتولد visitor_id مختلف = سلوك مش طبيعي
     # 3. yt-dlp بيدير كوكيز YouTube داخلياً حسب player_client
     # بنستخدم الكوكيز الوهمية بس للمنصات التانية
     
-    platform_lower = platform.lower()
-    is_youtube = platform_lower == "youtube"
-    
-    if is_youtube:
-        # YouTube — بدون Cookie header (yt-dlp بيدير الكوكيز داخلياً)
-        headers = {
-            'User-Agent': _USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-        }
-    else:
-        # باقي المنصات — نضيف كوكيز وهمية عادية
-        yt_cookies = _get_youtube_cookies_header()
-        headers = {
-            'User-Agent': _USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Cookie': yt_cookies,
-        }
+    # 🔴 الكوكيز الوهمية اتشالت نهائياً — مش بتفيد وبتضر
+    # بنستخدم headers نظيفة بدون أي Cookie
+    headers = {
+        'User-Agent': _USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-us,en;q=0.5',
+    }
     
     # إعدادات مشتركة
     common_opts = {
@@ -1209,18 +1184,16 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
 
 
 async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: str, user_id: int, status_msg=None):
-    """تحميل فيديو أو صوت — مُحسّن v7 مع Invidious + Cobalt
+    """تحميل فيديو أو صوت — مُحسّن v8 مع yt-dlp كأولوية
     
-    🔴 FIX v7: Fallback chain جديدة مع Invidious:
-    -1. 🟢 YouTube RapidAPI (الأولوية القصوى لليوتيوب)
-    0. 🟣 Invidious API (طبقة جديدة — مجانية ومش بتتأثر بـ bot detection)
-    1. 🔵 Cobalt Self-Hosted
-    2. yt-dlp default + deno + remote_components
-    3. yt-dlp player_client fallback chain (android → ios → mweb → tv → web)
-    4. yt-dlp بدون كوكيز
-    5. Cloudflare Worker
-    6. تنسيق أبسط (best)
-    7. صوت بس لو كل حاجة فشلت
+    🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+    1. yt-dlp + deno + remote_components (الأفضل)
+    2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
+    3. yt-dlp بدون كوكيز
+    4. Cobalt Public API (fallback)
+    5. Invidious API (fallback)
+    6. Cobalt Self-Hosted (fallback)
+    7. Cloudflare Worker (آخر محاولة)
     """
     # تحديد الرسالة
     if hasattr(update_or_query, 'message'):
@@ -1260,24 +1233,152 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         except Exception:
             pass
         
-        # ═══ المرحلة -1: Cobalt Public API (لليوتيوب بس — الأولوية القصوى!) ═══
-        # 🟠 أي رابط يوتيوب → نستخدم Cobalt Public API بدل yt-dlp
-        # ده أسرع وأضمن لأن yt-dlp بيتحجب باستمرار من YouTube
-        # لو مش يوتيوب → نتخطى ونكمل بـ yt-dlp عادي
-        cobalt_public_result = None
+        # ═══════════════════════════════════════════════════════════════
+        # 🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+        # الترتيب الجديد:
+        # 1. yt-dlp + deno + remote_components (الأفضل)
+        # 2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
+        # 3. yt-dlp بدون كوكيز
+        # 4. Cobalt Public API (fallback)
+        # 5. Invidious API (fallback)
+        # 6. Cobalt Self-Hosted (fallback)
+        # 7. Cloudflare Worker (آخر محاولة)
+        # ═══════════════════════════════════════════════════════════════
         
-        if is_youtube:
+        info = None
+        last_error = None
+        
+        def _run_ytdlp(opts):
+            import yt_dlp
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=True)
+        
+        loop = asyncio.get_event_loop()
+        
+        # ═══ المحاولة الأولى: yt-dlp + deno + remote_components (الأفضل!) ═══
+        logger.info(f"📥 yt-dlp: Attempting download with deno+remote_components for {url[:80]}")
+        ydl_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=0)
+        
+        try:
+            info = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: _run_ytdlp(ydl_opts)),
+                timeout=300  # 5 دقائق
+            )
+        except Exception as first_error:
+            err_str = str(first_error).lower()
+            last_error = first_error
+            logger.warning(f"⚠️ yt-dlp first attempt failed (default+deno): {first_error}")
+            
+            # 🔴 لو YouTube حجبنا (bot detection) — حدث yt-dlp فوراً
+            if any(kw in err_str for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
+                logger.warning("🔴 YouTube bot detection detected! Triggering yt-dlp update...")
+                trigger_ytdlp_update()
+            
+            # ═══ Fallback chain — نجرب طرق مختلفة ═══
+            should_retry = any(kw in err_str for kw in [
+                "requested format", "ffmpeg", "merge", "format not available",
+                "no video formats", "unable to", "error", "http error",
+                "sign in", "login", "bot", "captcha", "confirm",
+                "http error 403", "forbidden", "age", "inappropriate",
+            ])
+            
+            if not should_retry:
+                raise  # خطأ مش متعلق — بنرفعه على طول
+            
+            is_youtube = platform.lower() == "youtube"
+            
+            # 🔴 FIX v5: لو YouTube — fallback chain محسّن
+            if is_youtube:
+                # ═══ المحاولة 2: نجرب player_clients كـ fallback ═══
+                for client_idx in range(1, 1 + len(_YOUTUBE_PLAYER_CLIENTS)):
+                    client_name = _YOUTUBE_PLAYER_CLIENTS[client_idx - 1][0]
+                    retry_label = {
+                        "android": "Android", "ios": "iOS", "mweb": "Mobile Web", "tv": "TV", "web": "Web"
+                    }.get(client_name, client_name)
+                    
+                    logger.info(f"🔄 Trying YouTube with {client_name} player_client (attempt {client_idx + 1})...")
+                    
+                    try:
+                        await status_msg.edit_text(
+                            f"🔄 جاري تجربة طريقة تانية ({retry_label})..." if lang == "ar" 
+                            else f"🔄 Trying another method ({retry_label})..."
+                        )
+                    except:
+                        pass
+                    
+                    fallback_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=client_idx)
+                    
+                    try:
+                        info = await asyncio.wait_for(
+                            loop.run_in_executor(None, lambda o=fallback_opts: _run_ytdlp(o)),
+                            timeout=300
+                        )
+                        if info is not None:
+                            logger.info(f"✅ Download succeeded with {client_name} player_client!")
+                            break
+                    except Exception as retry_error:
+                        last_error = retry_error
+                        err_str_retry = str(retry_error).lower()
+                        logger.warning(f"⚠️ Attempt {client_idx + 1} ({client_name}) also failed: {retry_error}")
+                        
+                        bot_keywords = ["sign in", "bot", "confirm", "captcha", "login", "403"]
+                        if not any(kw in err_str_retry for kw in bot_keywords):
+                            break
+                
+                # ═══ المحاولة 3: كل الطرق فشلت — نجرب بدون كوكيز ═══
+                if info is None:
+                    logger.info("🔄 All methods with cookies failed, trying WITHOUT cookies...")
+                    
+                    try:
+                        await status_msg.edit_text(
+                            "🔄 جاري تجربة طريقة نظيفة (بدون كوكيز)..." if lang == "ar" 
+                            else "🔄 Trying clean method (no cookies)..."
+                        )
+                    except:
+                        pass
+                    
+                    clean_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=0)
+                    clean_opts.pop('cookiefile', None)
+                    
+                    logger.info("🔄 Clean attempt (default+deno, no cookies)...")
+                    
+                    try:
+                        info = await asyncio.wait_for(
+                            loop.run_in_executor(None, lambda o=clean_opts: _run_ytdlp(o)),
+                            timeout=300
+                        )
+                        if info is not None:
+                            logger.info("✅ Download succeeded with default+deno (no cookies)!")
+                    except Exception as clean_error:
+                        last_error = clean_error
+                        logger.warning(f"⚠️ Clean attempt (no cookies) failed: {clean_error}")
+                        
+                        android_clean = _get_ydl_opts(quality, output_template, platform, player_client_idx=1)
+                        android_clean.pop('cookiefile', None)
+                        
+                        try:
+                            info = await asyncio.wait_for(
+                                loop.run_in_executor(None, lambda o=android_clean: _run_ytdlp(o)),
+                                timeout=300
+                            )
+                            if info is not None:
+                                logger.info("✅ Download succeeded with android (no cookies)!")
+                        except Exception as ac_error:
+                            last_error = ac_error
+                            logger.warning(f"⚠️ Android clean attempt also failed: {ac_error}")
+        
+        # ═══ المحاولة 4: Cobalt Public API (fallback لو yt-dlp فشل كله) ═══
+        if info is None and is_youtube:
+            logger.info("🟠 All yt-dlp methods failed, trying Cobalt Public API...")
             try:
-                logger.info(f"🟠 Cobalt Public: YouTube detected — using Cobalt Public API instead of yt-dlp")
-                
-                try:
-                    await status_msg.edit_text(
-                        "🟠 جاري التحميل عبر Cobalt..." if lang == "ar"
-                        else "🟠 Downloading via Cobalt..."
-                    )
-                except:
-                    pass
-                
+                await status_msg.edit_text(
+                    "🟠 جاري التحميل عبر Cobalt..." if lang == "ar"
+                    else "🟠 Downloading via Cobalt..."
+                )
+            except:
+                pass
+            
+            try:
                 cobalt_public_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
                 
                 if cobalt_public_result and cobalt_public_result.get("filepath"):
@@ -1291,14 +1392,12 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     size_mb = file_size / (1024 * 1024)
                     size_str = f"{size_mb:.1f}MB"
                     
-                    # تتبع الاستخدام
                     increment_usage(user_id, "youtube_summaries")
                     try: track_event("media_downloads")
                     except: pass
                     
                     await status_msg.delete()
                     
-                    # إرسال الملف
                     if quality == "audio":
                         try:
                             with open(file_path, 'rb') as f:
@@ -1338,40 +1437,20 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                                     else f"❌ Failed to send video ({size_str}). Try again!"
                                 )
                     
-                    # تنظيف الملف
                     try: os.remove(file_path)
                     except: pass
-                    
-                    return  # ✅ Cobalt Public نجح وخلاص!
+                    return  # ✅ Cobalt Public نجح!
                 
-                else:
-                    # Cobalt Public فشل — نكمل بالطرق العادية (Invidious → yt-dlp)
-                    logger.warning(f"⚠️ Cobalt Public failed, falling back to Invidious/yt-dlp...")
-                    cobalt_public_result = None
-                    
+                logger.warning(f"⚠️ Cobalt Public also failed, trying Invidious...")
             except Exception as cp_err:
-                logger.warning(f"⚠️ Cobalt Public error: {cp_err}, falling back to Invidious/yt-dlp...")
-                cobalt_public_result = None
+                logger.warning(f"⚠️ Cobalt Public error: {cp_err}, trying Invidious...")
         
-        # ═══ المرحلة -0.5: Invidious API Fallback (طبقة إضافية لليوتيوب) ═══
-        # 🟣 Invidious: واجهة بديلة لليوتيوب — مجانية ومفتوحة
-        # الميزة الرئيسية: مش بتتأثر بـ YouTube bot detection خالص
-        # الطلبات بتروح لسيرفرات Invidious مش من الـ IP بتاعك
-        # بنستخدمه لليوتيوب بس — المنصات التانية شغالة مع yt-dlp عادي
-        invidious_result = None
-        is_youtube = platform.lower() == "youtube"
-        
-        if is_youtube:
+        # ═══ المحاولة 5: Invidious API (fallback) ═══
+        if info is None and is_youtube:
             try:
                 from invidious_api import download_youtube_invidious_file
                 
-                # تحويل جودة التليجرام لجودة Invidious
-                inv_quality_map = {
-                    "best": "best",
-                    "medium": "medium",
-                    "low": "low",
-                    "audio": "audio",
-                }
+                inv_quality_map = {"best": "best", "medium": "medium", "low": "low", "audio": "audio"}
                 inv_quality = inv_quality_map.get(quality, "best")
                 
                 logger.info(f"🟣 Invidious: Attempting download quality={inv_quality} for {url[:80]}")
@@ -1384,14 +1463,13 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                 except:
                     pass
                 
-                # 🔴 timeout 60 ثانية — لو Invidious بطيء نروح Cobalt/yt-dlp
                 try:
                     invidious_result = await asyncio.wait_for(
                         download_youtube_invidious_file(url, quality=inv_quality, output_dir=tmpdir),
                         timeout=60
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Invidious timed out after 60s, falling back to Cobalt/yt-dlp")
+                    logger.warning(f"⚠️ Invidious timed out after 60s")
                     invidious_result = None
                 
                 if invidious_result and invidious_result.get("success") and invidious_result.get("file_path"):
@@ -1403,7 +1481,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     real_duration = invidious_result.get("duration", 0)
                     format_info = invidious_result.get("format_info", {})
                     
-                    # تحديد الجودة الحقيقية
                     quality_label = format_info.get("quality_label", "") or format_info.get("resolution", "")
                     if not quality_label:
                         if quality == "audio":
@@ -1414,14 +1491,12 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     size_mb = file_size / (1024 * 1024)
                     size_str = f"{size_mb:.1f}MB"
                     
-                    # تتبع الاستخدام
                     increment_usage(user_id, "youtube_summaries")
                     try: track_event("media_downloads")
                     except: pass
                     
                     await status_msg.delete()
                     
-                    # إرسال الملف
                     if quality == "audio":
                         try:
                             with open(file_path, 'rb') as f:
@@ -1461,33 +1536,25 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                                     else f"❌ Failed to send video ({size_str}). Try again!"
                                 )
                     
-                    # تنظيف الملف
                     try: os.remove(file_path)
                     except: pass
-                    
-                    return  # ✅ Invidious نجح وخلاص!
+                    return  # ✅ Invidious نجح!
                 
-                else:
-                    # Invidious فشل — نكمل بالطرق العادية
-                    error_code = invidious_result.get("error", "unknown") if invidious_result else "unknown"
-                    logger.warning(f"⚠️ Invidious failed ({error_code}), falling back to Cobalt/yt-dlp...")
-                    invidious_result = None
+                error_code = invidious_result.get("error", "unknown") if invidious_result else "unknown"
+                logger.warning(f"⚠️ Invidious failed ({error_code}), trying Cobalt Self-Hosted...")
                     
             except ImportError:
                 logger.warning("⚠️ invidious_api module not available, skipping Invidious")
             except Exception as inv_err:
-                logger.warning(f"⚠️ Invidious error: {inv_err}, falling back to Cobalt/yt-dlp...")
+                logger.warning(f"⚠️ Invidious error: {inv_err}, trying Cobalt Self-Hosted...")
         
-        # ═══ المرحلة 0: Cobalt Self-Hosted ═══
-        # 🔵 طريقة تانية — بيشتغل على سيرفر منفصل ومش بيتأثر بـ bot detection
-        # 🔴 لو Invidious نجح — مش محتاجين Cobalt
-        if not invidious_result:
+        # ═══ المحاولة 6: Cobalt Self-Hosted (fallback) ═══
+        cobalt_result = None
+        if info is None:
             cobalt_result = await _try_cobalt_download(url, quality, tmpdir)
-        else:
-            cobalt_result = None
+        
         if cobalt_result:
-            logger.info(f"🔵 Cobalt succeeded! Skipping yt-dlp, sending file directly...")
-            # Cobalt نجح — نجهز الملف ونرسله مباشرة بدون yt-dlp
+            logger.info(f"🔵 Cobalt Self-Hosted succeeded! Sending file directly...")
             filepath = cobalt_result["filepath"]
             filename = cobalt_result["filename"]
             filesize = cobalt_result["size"]
@@ -1496,7 +1563,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
             video_vcodec = "h264"
             video_acodec = "aac"
             
-            # بنعمل info dict وهمي عشان الكود يكمل عادي
             info = {
                 "title": video_title,
                 "duration": cobalt_result.get("duration", 0),
@@ -1505,290 +1571,93 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                 "acodec": "aac",
                 "requested_downloads": [{"height": video_height, "vcodec": "h264", "acodec": "aac"}],
             }
-        else:
-            # ═══ Cobalt فشل أو مش متاح → yt-dlp Fallback Chain ═══
-            info = None
-            last_error = None
-            
-            def _run_ytdlp(opts):
-                import yt_dlp
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    return ydl.extract_info(url, download=True)
-            
-            loop = asyncio.get_event_loop()
-            
-            # ═══ المحاولة الأولى: الطريقة الأساسية + deno + remote_components ═══
-            ydl_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=0)
-            
-            try:
-                info = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: _run_ytdlp(ydl_opts)),
-                    timeout=300  # 5 دقائق
-                )
-            except Exception as first_error:
-                err_str = str(first_error).lower()
-                last_error = first_error
-                logger.warning(f"⚠️ First download attempt failed (default+deno): {first_error}")
+        
+        # ═══ المحاولة 7: Cloudflare Worker (آخر محاولة) ═══
+        if info is None and is_youtube:
+            from config import CLOUDFLARE_WORKER_URL
+            if CLOUDFLARE_WORKER_URL:
+                logger.info(f"🔄 All methods failed, trying Cloudflare Worker: {CLOUDFLARE_WORKER_URL}")
+                try:
+                    await status_msg.edit_text(
+                        "🔄 جاري التحميل عبر سيرفر خاص..." if lang == "ar"
+                        else "🔄 Downloading via proxy server..."
+                    )
+                except:
+                    pass
                 
-                # ═══ Fallback chain — نجرب طرق مختلفة ═══
-                should_retry = any(kw in err_str for kw in [
-                    "requested format", "ffmpeg", "merge", "format not available",
-                    "no video formats", "unable to", "error", "http error",
-                    "sign in", "login", "bot", "captcha", "confirm",
-                    "http error 403", "forbidden", "age", "inappropriate",
-                ])
-                
-                # 🔴 لو YouTube حجبنا (bot detection) — حدث yt-dlp فوراً
-                if any(kw in err_str for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
-                    logger.warning("🔴 YouTube bot detection detected! Triggering yt-dlp update...")
-                    trigger_ytdlp_update()
-                
-                if not should_retry:
-                    raise  # خطأ مش متعلق — بنرفعه على طول
-                
-                is_youtube = platform.lower() == "youtube"
-                
-                # 🔴 FIX v5: لو YouTube — fallback chain محسّن
-                if is_youtube:
-                    # ═══ المرحلة 1: نجرب player_clients كـ fallback ═══
-                    for client_idx in range(1, 1 + len(_YOUTUBE_PLAYER_CLIENTS)):
-                        client_name = _YOUTUBE_PLAYER_CLIENTS[client_idx - 1][0]
-                        retry_label = {
-                            "android": "Android", "ios": "iOS", "mweb": "Mobile Web", "tv": "TV", "web": "Web"
-                        }.get(client_name, client_name)
-                        
-                        logger.info(f"🔄 Trying YouTube with {client_name} player_client (attempt {client_idx + 1})...")
-                        
-                        try:
-                            await status_msg.edit_text(
-                                f"🔄 جاري تجربة طريقة تانية ({retry_label})..." if lang == "ar" 
-                                else f"🔄 Trying another method ({retry_label})..."
-                            )
-                        except:
-                            pass
-                        
-                        fallback_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=client_idx)
-                        
-                        try:
-                            info = await asyncio.wait_for(
-                                loop.run_in_executor(None, lambda o=fallback_opts: _run_ytdlp(o)),
-                                timeout=300
-                            )
-                            if info is not None:
-                                logger.info(f"✅ Download succeeded with {client_name} player_client!")
-                                break
-                        except Exception as retry_error:
-                            last_error = retry_error
-                            err_str_retry = str(retry_error).lower()
-                            logger.warning(f"⚠️ Attempt {client_idx + 1} ({client_name}) also failed: {retry_error}")
-                            
-                            bot_keywords = ["sign in", "bot", "confirm", "captcha", "login", "403"]
-                            if not any(kw in err_str_retry for kw in bot_keywords):
-                                break
+                try:
+                    import requests as sync_requests
+                    from urllib.parse import quote
+                    worker_url = CLOUDFLARE_WORKER_URL.rstrip("/")
+                    dl_type = "audio" if quality == "audio" else "video"
+                    api_url = f"{worker_url}/download?url={quote(url)}&type={dl_type}"
                     
-                    # ═══ المرحلة 2: كل الطرق فشلت — نجرب بدون كوكيز ═══
-                    if info is None:
-                        logger.info("🔄 All methods with cookies failed, trying WITHOUT cookies...")
-                        
-                        try:
-                            await status_msg.edit_text(
-                                "🔄 جاري تجربة طريقة نظيفة (بدون كوكيز)..." if lang == "ar" 
-                                else "🔄 Trying clean method (no cookies)..."
-                            )
-                        except:
-                            pass
-                        
-                        clean_opts = _get_ydl_opts(quality, output_template, platform, player_client_idx=0)
-                        clean_opts.pop('cookiefile', None)
-                        
-                        logger.info("🔄 Clean attempt (default+deno, no cookies)...")
-                        
-                        try:
-                            info = await asyncio.wait_for(
-                                loop.run_in_executor(None, lambda o=clean_opts: _run_ytdlp(o)),
-                                timeout=300
-                            )
-                            if info is not None:
-                                logger.info("✅ Download succeeded with default+deno (no cookies)!")
-                        except Exception as clean_error:
-                            last_error = clean_error
-                            logger.warning(f"⚠️ Clean attempt (no cookies) failed: {clean_error}")
+                    cf_response = sync_requests.get(api_url, timeout=120, stream=True)
+                    
+                    if cf_response.status_code == 200:
+                        content_type = cf_response.headers.get('Content-Type', '')
+                        if 'video' in content_type or 'audio' in content_type or 'octet-stream' in content_type:
+                            ext = "mp3" if quality == "audio" else "mp4"
+                            cf_filename = f"youtube_cf.{ext}"
+                            cf_filepath = os.path.join(tmpdir, cf_filename)
                             
-                            android_clean = _get_ydl_opts(quality, output_template, platform, player_client_idx=1)
-                            android_clean.pop('cookiefile', None)
+                            with open(cf_filepath, 'wb') as cf_f:
+                                for chunk in cf_response.iter_content(chunk_size=8192):
+                                    cf_f.write(chunk)
                             
-                            try:
-                                info = await asyncio.wait_for(
-                                    loop.run_in_executor(None, lambda o=android_clean: _run_ytdlp(o)),
-                                    timeout=300
-                                )
-                                if info is not None:
-                                    logger.info("✅ Download succeeded with android (no cookies)!")
-                            except Exception as ac_error:
-                                last_error = ac_error
-                                logger.warning(f"⚠️ Android clean attempt also failed: {ac_error}")
-                        
-                        # ═══ المرحلة 2.5: Cloudflare Worker Fallback ═══
-                        if info is None:
-                            from config import CLOUDFLARE_WORKER_URL
-                            if CLOUDFLARE_WORKER_URL:
-                                logger.info(f"🔄 All yt-dlp methods failed, trying Cloudflare Worker: {CLOUDFLARE_WORKER_URL}")
-                                try:
-                                    await status_msg.edit_text(
-                                        "🔄 جاري التحميل عبر سيرفر خاص..." if lang == "ar"
-                                        else "🔄 Downloading via proxy server..."
-                                    )
-                                except:
-                                    pass
-                                
-                                try:
-                                    import requests as sync_requests
-                                    from urllib.parse import quote
-                                    worker_url = CLOUDFLARE_WORKER_URL.rstrip("/")
-                                    dl_type = "audio" if quality == "audio" else "video"
-                                    api_url = f"{worker_url}/download?url={quote(url)}&type={dl_type}"
-                                    
-                                    cf_response = sync_requests.get(api_url, timeout=120, stream=True)
-                                    
-                                    if cf_response.status_code == 200:
-                                        content_type = cf_response.headers.get('Content-Type', '')
-                                        if 'video' in content_type or 'audio' in content_type or 'octet-stream' in content_type:
-                                            ext = "mp3" if quality == "audio" else "mp4"
-                                            cf_filename = f"youtube_cf.{ext}"
-                                            cf_filepath = os.path.join(tmpdir, cf_filename)
-                                            
-                                            with open(cf_filepath, 'wb') as cf_f:
-                                                for chunk in cf_response.iter_content(chunk_size=8192):
-                                                    cf_f.write(chunk)
-                                            
-                                            cf_size = os.path.getsize(cf_filepath)
-                                            if cf_size > 0:
-                                                info = {
-                                                    "title": "YouTube Video",
-                                                    "duration": 0,
-                                                    "height": 720,
-                                                    "vcodec": "h264",
-                                                    "acodec": "aac",
-                                                    "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
-                                                }
-                                                logger.info(f"✅ Cloudflare Worker download succeeded! Size: {cf_size // (1024*1024)}MB")
-                                            else:
-                                                os.remove(cf_filepath)
-                                        else:
-                                            try:
-                                                cf_data = cf_response.json()
-                                                if cf_data.get("url"):
-                                                    stream_url = cf_data["url"]
-                                                    ext = "mp3" if quality == "audio" else "mp4"
-                                                    cf_filename = f"youtube_cf.{ext}"
-                                                    cf_filepath = os.path.join(tmpdir, cf_filename)
-                                                    
-                                                    dl_resp = sync_requests.get(stream_url, timeout=120, stream=True, headers={
-                                                        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14)',
-                                                        'Referer': 'https://www.youtube.com/',
-                                                    })
-                                                    
-                                                    if dl_resp.status_code == 200:
-                                                        with open(cf_filepath, 'wb') as cf_f:
-                                                            for chunk in dl_resp.iter_content(chunk_size=8192):
-                                                                cf_f.write(chunk)
-                                                        
-                                                        cf_size = os.path.getsize(cf_filepath)
-                                                        if cf_size > 0:
-                                                            info = {
-                                                                "title": "YouTube Video",
-                                                                "duration": 0,
-                                                                "height": 720,
-                                                                "vcodec": "h264",
-                                                                "acodec": "aac",
-                                                                "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
-                                                            }
-                                                            logger.info(f"✅ CF Worker stream URL download succeeded! Size: {cf_size // (1024*1024)}MB")
-                                                        else:
-                                                            os.remove(cf_filepath)
-                                                    else:
-                                                        proxy_url = f"{worker_url}/proxy?url={quote(stream_url)}"
-                                                        proxy_resp = sync_requests.get(proxy_url, timeout=120, stream=True)
-                                                        
-                                                        if proxy_resp.status_code == 200:
-                                                            with open(cf_filepath, 'wb') as cf_f:
-                                                                for chunk in proxy_resp.iter_content(chunk_size=8192):
-                                                                    cf_f.write(chunk)
-                                                            
-                                                            cf_size = os.path.getsize(cf_filepath)
-                                                            if cf_size > 0:
-                                                                info = {
-                                                                    "title": "YouTube Video",
-                                                                    "duration": 0,
-                                                                    "height": 720,
-                                                                    "vcodec": "h264",
-                                                                    "acodec": "aac",
-                                                                    "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
-                                                                }
-                                                                logger.info(f"✅ CF Worker proxy download succeeded! Size: {cf_size // (1024*1024)}MB")
-                                                            else:
-                                                                os.remove(cf_filepath)
-                                            except Exception as cf_json_err:
-                                                logger.warning(f"⚠️ CF Worker JSON parse error: {cf_json_err}")
-                                    else:
-                                        logger.warning(f"⚠️ CF Worker returned status {cf_response.status_code}")
-                                except Exception as cf_err:
-                                    logger.warning(f"⚠️ Cloudflare Worker fallback failed: {cf_err}")
+                            cf_size = os.path.getsize(cf_filepath)
+                            if cf_size > 0:
+                                info = {
+                                    "title": "YouTube Video",
+                                    "duration": 0,
+                                    "height": 720,
+                                    "vcodec": "h264",
+                                    "acodec": "aac",
+                                    "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
+                                }
+                                logger.info(f"✅ Cloudflare Worker download succeeded! Size: {cf_size // (1024*1024)}MB")
                             else:
-                                logger.info("⚠️ CLOUDFLARE_WORKER_URL not set, skipping CF Worker fallback")
-                        
-                        # ═══ المرحلة 3: محاولة أخيرة — تنسيق أبسط ═══
-                        if info is None:
-                            logger.info("🔄 Trying simple 'best' format as last resort...")
-                            
+                                os.remove(cf_filepath)
+                        else:
                             try:
-                                await status_msg.edit_text(
-                                    "🔄 جاري تجربة طريقة أبسط..." if lang == "ar" else "🔄 Trying simpler method..."
-                                )
-                            except:
-                                pass
-                            
-                            simple_opts = _get_ydl_opts(quality, output_template, platform, use_ffmpeg=False, player_client_idx=0)
-                            simple_opts['format'] = 'best[ext=mp4]/best' if quality != "audio" else 'bestaudio/best'
-                            simple_opts.pop('postprocessors', None)
-                            simple_opts.pop('merge_output_format', None)
-                            simple_opts.pop('remux_video', None)
-                            simple_opts.pop('extractor_args', None)
-                            simple_opts.pop('remote_components', None)
-                            simple_opts.pop('cookiefile', None)
-                            
-                            try:
-                                info = await asyncio.wait_for(
-                                    loop.run_in_executor(None, lambda: _run_ytdlp(simple_opts)),
-                                    timeout=300
-                                )
-                            except Exception as final_error:
-                                last_error = final_error
-                                logger.warning(f"⚠️ Final attempt (simple format) also failed: {final_error}")
-                else:
-                    # مش YouTube — نجرب تنسيق أبسط بس
-                    logger.info("🔄 Trying simple 'best' format for non-YouTube platform...")
-                    fallback_opts = _get_ydl_opts(quality, output_template, platform, use_ffmpeg=False, player_client_idx=0)
-                    fallback_opts['format'] = 'best[ext=mp4]/best' if quality != "audio" else 'bestaudio/best'
-                    fallback_opts.pop('postprocessors', None)
-                    fallback_opts.pop('merge_output_format', None)
-                    fallback_opts.pop('remux_video', None)
-                    
-                    try:
-                        await status_msg.edit_text(
-                            "🔄 جاري إعادة المحاولة..." if lang == "ar" else "🔄 Retrying..."
-                        )
-                    except:
-                        pass
-                    
-                    try:
-                        info = await asyncio.wait_for(
-                            loop.run_in_executor(None, lambda: _run_ytdlp(fallback_opts)),
-                            timeout=300
-                        )
-                    except Exception as second_error:
-                        last_error = second_error
-                        logger.warning(f"⚠️ Second attempt (simple format) also failed: {second_error}")
+                                cf_data = cf_response.json()
+                                if cf_data.get("url"):
+                                    stream_url = cf_data["url"]
+                                    ext = "mp3" if quality == "audio" else "mp4"
+                                    cf_filename = f"youtube_cf.{ext}"
+                                    cf_filepath = os.path.join(tmpdir, cf_filename)
+                                    
+                                    dl_resp = sync_requests.get(stream_url, timeout=120, stream=True, headers={
+                                        'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14)',
+                                        'Referer': 'https://www.youtube.com/',
+                                    })
+                                    
+                                    if dl_resp.status_code == 200:
+                                        with open(cf_filepath, 'wb') as cf_f:
+                                            for chunk in dl_resp.iter_content(chunk_size=8192):
+                                                cf_f.write(chunk)
+                                        
+                                        cf_size = os.path.getsize(cf_filepath)
+                                        if cf_size > 0:
+                                            info = {
+                                                "title": "YouTube Video",
+                                                "duration": 0,
+                                                "height": 720,
+                                                "vcodec": "h264",
+                                                "acodec": "aac",
+                                                "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
+                                            }
+                                            logger.info(f"✅ CF Worker stream URL download succeeded! Size: {cf_size // (1024*1024)}MB")
+                                        else:
+                                            os.remove(cf_filepath)
+                            except Exception as cf_json_err:
+                                logger.warning(f"⚠️ CF Worker JSON parse error: {cf_json_err}")
+                    else:
+                        logger.warning(f"⚠️ CF Worker returned status {cf_response.status_code}")
+                except Exception as cf_err:
+                    logger.warning(f"⚠️ Cloudflare Worker fallback failed: {cf_err}")
+            else:
+                logger.info("⚠️ CLOUDFLARE_WORKER_URL not set, skipping CF Worker fallback")
         
         # ═══ البحث عن الملف المحمل ═══
         if info is None and last_error:
