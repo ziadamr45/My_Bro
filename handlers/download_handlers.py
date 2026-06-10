@@ -536,13 +536,261 @@ async def _download_direct_audio(update: Update, url: str, lang: str, user_id: i
 
 
 # ═══════════════════════════════════════
-# تحميل بـ Cobalt Self-Hosted (الطبقة الأولى — الأقوى)
+# Cobalt Public API — لليوتيوب بس (بدل yt-dlp)
 # ═══════════════════════════════════════
 
-# 🔴 Cobalt: أقوى بديل عملي لتحميل الفيديوهات
+# 🔴 استراتيجية جديدة: أي رابط YouTube (youtube.com, youtu.be, youtube.com/shorts)
+# بنستخدم Cobalt Public API بدل yt-dlp تماماً
+# السبب: yt-dlp بيتحجب باستمرار من YouTube (bot detection)
+# Cobalt Public API أسرع وأضمن لليوتيوب
+
+_COBALT_PUBLIC_API = "https://api.cobalt.tools/api/json"
+
+_YOUTUBE_URL_PATTERN = re.compile(
+    r'(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube\.com/shorts)/',
+    re.IGNORECASE
+)
+
+
+def _is_youtube_url(url: str) -> bool:
+    """فحص هل الرابط يوتيوب — يشمل youtube.com, youtu.be, youtube.com/shorts"""
+    return bool(_YOUTUBE_URL_PATTERN.search(url))
+
+
+async def _try_cobalt_for_youtube(url: str, quality: str, tmpdir: str) -> dict | None:
+    """تحميل فيديو يوتيوب عبر Cobalt API — Self-Hosted أولاً ثم Public
+    
+    🔴 بيتعمل ليوتيوب بس — باقي المنصات شغالة بـ yt-dlp زي ما هي
+    
+    Cobalt API بيشتغل كالتالي:
+    - POST للـ API endpoint
+    - Payload: {"url": video_url, "vQuality": "720", "filenamePattern": "classic"}
+    - لو status == "stream" / "redirect" / "tunnel" → رجّع الـ url
+    - لو status == "picker" → رجّع أول رابط في القائمة
+    
+    يرجع dict فيه:
+    - filepath: مسار الملف المحمل
+    - filename: اسم الملف
+    - title: عنوان الفيديو
+    - duration: المدة
+    - size: حجم الملف
+    
+    أو None لو فشل
+    """
+    import aiohttp
+    
+    # تحويل الجودة لصيغة Cobalt
+    quality_map = {
+        "best": "1080",
+        "medium": "720",
+        "low": "480",
+        "audio": "720",  # الجودة مش مهمة للأوديو
+    }
+    v_quality = quality_map.get(quality, "720")
+    
+    is_audio = quality == "audio"
+    
+    # ═══ محاولة 1: Self-Hosted Cobalt (COBALT_API_URL) ═══
+    # لو عندنا سيرفر Cobalt شغال — ده الأضمن
+    try:
+        from config import COBALT_API_URL, COBALT_API_KEY
+        
+        if COBALT_API_URL:
+            api_url = COBALT_API_URL.rstrip("/")
+            
+            # v8 format for self-hosted
+            payload = {
+                "url": url,
+                "videoQuality": v_quality,
+                "downloadMode": "audio" if is_audio else "auto",
+                "audioFormat": "mp3" if is_audio else "best",
+                "filenameStyle": "classic",
+                "youtubeVideoCodec": "h264",
+            }
+            
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            
+            if COBALT_API_KEY:
+                headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
+            
+            logger.info(f"🟠 Cobalt Self-Hosted: requesting download for {url[:80]} (quality={v_quality}, audio={is_audio})")
+            
+            result = await _cobalt_api_request(api_url, payload, headers, v_quality, is_audio, tmpdir)
+            if result:
+                return result
+            
+            logger.warning(f"⚠️ Cobalt Self-Hosted failed, trying next...")
+    except Exception as e:
+        logger.warning(f"⚠️ Cobalt Self-Hosted error: {e}")
+    
+    # ═══ محاولة 2: Cobalt Public API (api.cobalt.tools) ═══
+    # الـ API الرسمي محتاج API key (JWT) — بنستخدم الـ COBALT_API_KEY لو متاح
+    try:
+        from config import COBALT_API_KEY
+        
+        public_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        
+        if COBALT_API_KEY:
+            public_headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
+        
+        # v8 format for public API
+        public_payload = {
+            "url": url,
+            "videoQuality": v_quality,
+            "filenameStyle": "classic",
+        }
+        
+        if is_audio:
+            public_payload["downloadMode"] = "audio"
+            public_payload["audioFormat"] = "mp3"
+        
+        logger.info(f"🟠 Cobalt Public API: requesting download for {url[:80]}")
+        
+        result = await _cobalt_api_request("https://api.cobalt.tools", public_payload, public_headers, v_quality, is_audio, tmpdir)
+        if result:
+            return result
+        
+        logger.warning(f"⚠️ Cobalt Public API failed")
+    except Exception as e:
+        logger.warning(f"⚠️ Cobalt Public API error: {e}")
+    
+    # كل المحاولات فشلت
+    logger.warning(f"🟠 All Cobalt methods failed for {url[:80]}")
+    return None
+
+
+async def _cobalt_api_request(api_url: str, payload: dict, headers: dict, 
+                               v_quality: str, is_audio: bool, tmpdir: str) -> dict | None:
+    """طلب تحميل من أي Cobalt API endpoint — مشتركة بين Self-Hosted و Public
+    
+    Args:
+        api_url: رابط الـ API (بدون trailing slash)
+        payload: الـ request payload
+        headers: الـ request headers
+        v_quality: الجودة (720, 1080, 480)
+        is_audio: هل تحميل صوت
+        tmpdir: مجلد التحميل المؤقت
+    """
+    import aiohttp
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # الخطوة 1: طلب رابط التحميل من Cobalt
+            async with session.post(
+                f"{api_url}/",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    resp_text = await resp.text()
+                    logger.warning(f"🟠 Cobalt: API returned status {resp.status}: {resp_text[:200]}")
+                    return None
+                
+                data = await resp.json()
+            
+            status = data.get("status", "")
+            
+            if status == "error":
+                error_code = data.get("error", {})
+                if isinstance(error_code, dict):
+                    error_code = error_code.get("code", "unknown")
+                logger.warning(f"🟠 Cobalt: error response: {error_code}")
+                return None
+            
+            download_url = None
+            filename = None
+            
+            if status in ("stream", "redirect", "tunnel"):
+                # رابط مباشر للفيديو
+                download_url = data.get("url")
+                filename = data.get("filename", "")
+            elif status == "picker":
+                # محتوى متعدد (carousel, shorts playlist, إلخ)
+                picker_items = data.get("picker", [])
+                audio_url = data.get("audio")
+                if picker_items:
+                    # نختار أول عنصر — زي ما المستخدم طلب
+                    download_url = picker_items[0].get("url")
+                    filename = data.get("filename", "")
+                elif audio_url:
+                    download_url = audio_url
+                    filename = data.get("audioFilename", "audio.mp3")
+            else:
+                logger.warning(f"🟠 Cobalt: unknown status '{status}'")
+                return None
+            
+            if not download_url:
+                logger.warning("🟠 Cobalt: no download URL in response")
+                return None
+            
+            logger.info(f"🟠 Cobalt: got download URL, downloading file...")
+            
+            # الخطوة 2: تحميل الملف من الرابط
+            ext = "mp3" if is_audio else "mp4"
+            if not filename:
+                filename = f"youtube_download.{ext}"
+            # تنظيف اسم الملف
+            filename = re.sub(r'[^\w\-.]', '_', filename)
+            if not filename.endswith(ext):
+                filename = f"{filename.rsplit('.', 1)[0] if '.' in filename else filename}.{ext}"
+            
+            filepath = os.path.join(tmpdir, filename)
+            
+            async with session.get(
+                download_url,
+                timeout=aiohttp.ClientTimeout(total=300),  # 5 دقائق للملفات الكبيرة
+            ) as dl_resp:
+                if dl_resp.status != 200:
+                    logger.warning(f"🟠 Cobalt: download URL returned status {dl_resp.status}")
+                    return None
+                
+                content_length = dl_resp.headers.get("Content-Length", "unknown")
+                logger.info(f"🟠 Cobalt: downloading file (size: {content_length} bytes)...")
+                
+                with open(filepath, 'wb') as f:
+                    async for chunk in dl_resp.content.iter_chunked(8192):
+                        f.write(chunk)
+            
+            file_size = os.path.getsize(filepath)
+            if file_size == 0:
+                logger.warning("🟠 Cobalt: downloaded file is empty")
+                os.remove(filepath)
+                return None
+            
+            logger.info(f"🟠 Cobalt: download succeeded! Size: {file_size // (1024*1024)}MB")
+            
+            return {
+                "filepath": filepath,
+                "filename": filename,
+                "title": filename.rsplit('.', 1)[0] if filename else "YouTube Video",
+                "duration": 0,
+                "height": int(v_quality) if v_quality.isdigit() else 720,
+                "size": file_size,
+                "method": "cobalt",
+            }
+    
+    except asyncio.TimeoutError:
+        logger.warning("🟠 Cobalt: request timed out")
+        return None
+    except Exception as e:
+        logger.warning(f"🟠 Cobalt: error: {e}")
+        return None
+
+
+# ═══════════════════════════════════════
+# تحميل بـ Cobalt Self-Hosted (طبقة إضافية)
+# ═══════════════════════════════════════
+
+# 🔴 Cobalt Self-Hosted: طبقة إضافية لو الـ Public API فشل
 # بنشغله على سيرفر Railway منفصل ونربطه بالبوت
-# الميزة: بيشتغل بشكل مستقل عن yt-dlp ومش بيتأثر بـ YouTube bot detection
-# لو Cobalt فشل → بنكمل بالـ fallback chain العادي (yt-dlp → CF Worker)
 
 async def _try_cobalt_download(url: str, quality: str, tmpdir: str) -> dict | None:
     """تحميل فيديو/صوت عبر Cobalt Self-Hosted API
@@ -1011,7 +1259,100 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         except Exception:
             pass
         
-        # ═══ المرحلة -0.5: Invidious API Fallback (طبقة جديدة!) ═══
+        # ═══ المرحلة -1: Cobalt Public API (لليوتيوب بس — الأولوية القصوى!) ═══
+        # 🟠 أي رابط يوتيوب → نستخدم Cobalt Public API بدل yt-dlp
+        # ده أسرع وأضمن لأن yt-dlp بيتحجب باستمرار من YouTube
+        # لو مش يوتيوب → نتخطى ونكمل بـ yt-dlp عادي
+        cobalt_public_result = None
+        
+        if is_youtube:
+            try:
+                logger.info(f"🟠 Cobalt Public: YouTube detected — using Cobalt Public API instead of yt-dlp")
+                
+                try:
+                    await status_msg.edit_text(
+                        "🟠 جاري التحميل عبر Cobalt..." if lang == "ar"
+                        else "🟠 Downloading via Cobalt..."
+                    )
+                except:
+                    pass
+                
+                cobalt_public_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
+                
+                if cobalt_public_result and cobalt_public_result.get("filepath"):
+                    logger.info(f"🟠 Cobalt Public succeeded! File: {cobalt_public_result['filepath']}")
+                    
+                    file_path = cobalt_public_result["file_path"] if "file_path" in cobalt_public_result else cobalt_public_result["filepath"]
+                    file_size = cobalt_public_result.get("size", os.path.getsize(file_path))
+                    video_title = cobalt_public_result.get("title", "YouTube Video")
+                    video_height = cobalt_public_result.get("height", 720)
+                    
+                    size_mb = file_size / (1024 * 1024)
+                    size_str = f"{size_mb:.1f}MB"
+                    
+                    # تتبع الاستخدام
+                    increment_usage(user_id, "youtube_summaries")
+                    try: track_event("media_downloads")
+                    except: pass
+                    
+                    await status_msg.delete()
+                    
+                    # إرسال الملف
+                    if quality == "audio":
+                        try:
+                            with open(file_path, 'rb') as f:
+                                caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {video_title[:200]}\n📁 {size_str} | Cobalt"
+                                await message.reply_audio(
+                                    audio=f, filename=f"{video_title[:50]}.mp3",
+                                    caption=caption,
+                                    parse_mode="HTML",
+                                )
+                        except Exception as send_err:
+                            logger.warning(f"⚠️ Cobalt audio send failed: {send_err}")
+                            await message.reply_text(
+                                f"❌ فشل إرسال الصوت ({size_str}). جرب تاني!" if lang == "ar"
+                                else f"❌ Failed to send audio ({size_str}). Try again!"
+                            )
+                    else:
+                        try:
+                            with open(file_path, 'rb') as f:
+                                tech_info = f"{video_height}p | {size_str} | Cobalt"
+                                caption = f"📥 {'تم تحميل الفيديو!' if lang == 'ar' else 'Video downloaded!'}\n🎬 {video_title[:200]}\n📊 {tech_info}"
+                                await message.reply_video(
+                                    video=f, filename=f"{video_title[:50]}.mp4",
+                                    caption=caption,
+                                    parse_mode="HTML",
+                                    supports_streaming=True,
+                                )
+                        except Exception as send_err:
+                            logger.warning(f"⚠️ Cobalt video send failed (likely too large): {send_err}")
+                            if quality != "low" and quality != "audio":
+                                if lang == "ar":
+                                    await message.reply_text(f"⚠️ الملف كبير ({size_str}). جرب جودة أقل!")
+                                else:
+                                    await message.reply_text(f"⚠️ File too large ({size_str}). Try a lower quality!")
+                            else:
+                                await message.reply_text(
+                                    f"❌ فشل إرسال الفيديو ({size_str}). جرب تاني!" if lang == "ar"
+                                    else f"❌ Failed to send video ({size_str}). Try again!"
+                                )
+                    
+                    # تنظيف الملف
+                    try: os.remove(file_path)
+                    except: pass
+                    
+                    return  # ✅ Cobalt Public نجح وخلاص!
+                
+                else:
+                    # Cobalt Public فشل — نكمل بالطرق العادية (Invidious → yt-dlp)
+                    logger.warning(f"⚠️ Cobalt Public failed, falling back to Invidious/yt-dlp...")
+                    cobalt_public_result = None
+                    
+            except Exception as cp_err:
+                logger.warning(f"⚠️ Cobalt Public error: {cp_err}, falling back to Invidious/yt-dlp...")
+                cobalt_public_result = None
+        
+        # ═══ المرحلة -0.5: Invidious API Fallback (طبقة إضافية لليوتيوب) ═══
         # 🟣 Invidious: واجهة بديلة لليوتيوب — مجانية ومفتوحة
         # الميزة الرئيسية: مش بتتأثر بـ YouTube bot detection خالص
         # الطلبات بتروح لسيرفرات Invidious مش من الـ IP بتاعك

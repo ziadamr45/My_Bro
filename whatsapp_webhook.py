@@ -1166,7 +1166,82 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         tmpdir = tempfile.mkdtemp(prefix="mybro_wa_dl_")
         output_template = os.path.join(tmpdir, "%(title).80s.%(ext)s")
         
-        # ═══ المرحلة -0.5: Invidious API (أول طبقة لليوتيوب!) ═══
+        # ═══ المرحلة -1: Cobalt Public API (لليوتيوب بس — الأولوية القصوى!) ═══
+        # 🟠 أي رابط يوتيوب → نستخدم Cobalt Public API بدل yt-dlp
+        # ده أسرع وأضمن لأن yt-dlp بيتحجب باستمرار من YouTube
+        cobalt_public_result = None
+        
+        if is_youtube:
+            try:
+                from handlers.download_handlers import _try_cobalt_for_youtube
+                
+                logger.info(f"🟠 Cobalt Public (WhatsApp): YouTube detected — using Cobalt Public API")
+                
+                try:
+                    await _send_whatsapp_message(wa_id, "🟠 جاري التحميل عبر Cobalt...")
+                except:
+                    pass
+                
+                cobalt_public_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
+                
+                if cobalt_public_result and cobalt_public_result.get("filepath"):
+                    logger.info(f"🟠 Cobalt Public (WhatsApp) succeeded!")
+                    
+                    file_path = cobalt_public_result["filepath"]
+                    file_size = cobalt_public_result.get("size", os.path.getsize(file_path))
+                    video_title = cobalt_public_result.get("title", "YouTube Video")
+                    video_height = cobalt_public_result.get("height", 720)
+                    is_audio = (quality == "audio")
+                    
+                    size_mb = file_size / (1024 * 1024)
+                    size_str = f"{size_mb:.1f}MB"
+                    
+                    # تتبع الاستخدام
+                    try:
+                        from premium import increment_usage
+                        increment_usage(wa_user_id, "downloads")
+                    except:
+                        pass
+                    try:
+                        from dashboard import track_event
+                        track_event("whatsapp_media_downloads", platform="whatsapp")
+                    except: pass
+                    
+                    # WhatsApp limit
+                    if file_size > 100 * 1024 * 1024:
+                        await _send_whatsapp_message(wa_id, f"⚠️ الملف كبير ({size_str}) — أكبر من حد واتساب (100MB)")
+                    else:
+                        # إرسال الملف عبر واتساب
+                        with open(file_path, 'rb') as f:
+                            file_data = f.read()
+                        
+                        if is_audio:
+                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', video_title)[:50] + '.mp3'
+                            await _send_whatsapp_audio(wa_id, file_data, safe_filename)
+                        else:
+                            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', video_title)[:50] + '.mp4'
+                            content_type = "video/mp4"
+                            caption = f"📥 {video_title[:200]}\n📊 {video_height}p | {size_str} | Cobalt"
+                            await _send_whatsapp_document(wa_id, file_data, safe_filename, content_type, caption)
+                    
+                    # تنظيف
+                    try: os.remove(file_path)
+                    except: pass
+                    try: shutil.rmtree(tmpdir, ignore_errors=True)
+                    except: pass
+                    
+                    await feedback.stop()
+                    return  # ✅ Cobalt Public نجح!
+                
+                else:
+                    logger.warning(f"⚠️ Cobalt Public (WhatsApp) failed, falling back to Invidious/yt-dlp...")
+                    cobalt_public_result = None
+                    
+            except Exception as cp_err:
+                logger.warning(f"⚠️ Cobalt Public (WhatsApp) error: {cp_err}, falling back to Invidious/yt-dlp...")
+                cobalt_public_result = None
+        
+        # ═══ المرحلة -0.5: Invidious API (طبقة إضافية لليوتيوب!) ═══
         # 🟣 Invidious: واجهة بديلة لليوتيوب — مجانية ومفتوحة
         # الميزة الرئيسية: مش بتتأثر بـ YouTube bot detection خالص
         # الطلبات بتروح لسيرفرات Invidious مش من الـ IP بتاعك
