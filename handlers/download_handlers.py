@@ -1943,31 +1943,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         
         loop = asyncio.get_event_loop()
         
-        # 🔴 FIX: Progress updater — نحدث رسالة الحالة كل 15 ثانية عشان المستخدم يعرف إن التحميل شغال
-        import time as _time_mod
-        _dl_start_time = _time_mod.time()
-        _stop_dl_progress = asyncio.Event()
-        
-        async def _update_download_progress():
-            """تحديث رسالة الحالة كل 15 ثانية بمدة التحميل"""
-            while not _stop_dl_progress.is_set():
-                try:
-                    await asyncio.sleep(15)
-                except:
-                    break
-                if _stop_dl_progress.is_set():
-                    break
-                elapsed = int(_time_mod.time() - _dl_start_time)
-                mins, secs = divmod(elapsed, 60)
-                try:
-                    if lang == "ar":
-                        await status_msg.edit_text(f"⏳ جاري التحميل... ({mins}:{secs:02d})")
-                    else:
-                        await status_msg.edit_text(f"⏳ Downloading... ({mins}:{secs:02d})")
-                except:
-                    pass
-        
-        _progress_task = asyncio.create_task(_update_download_progress())
+        # Progress timer removed — no periodic updates
         
         from urllib.parse import quote as _url_quote
         # 🔴 FIX: quote for URL encoding
@@ -2003,11 +1979,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                                     ds_result = await ds_resp.json()
                                     if ds_result and ds_result.get("success"):
                                         logger.info(f"🖥️ Download Service succeeded! URL: {ds_result.get('url', '')[:60]}")
-                                        
-                                        # 🔴 إيقاف تحديث التقدم
-                                        _stop_dl_progress.set()
-                                        try: _progress_task.cancel()
-                                        except: pass
                                         
                                         # بعت الرابط للمستخدم
                                         cloud_msg = ds_result.get("cloud_msg", "")
@@ -3069,11 +3040,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         
         logger.info(f"✅ Downloaded: {filename} ({filesize // (1024*1024)}MB, {quality_label}, codec={video_vcodec})")
         
-        # 🔴 إيقاف تحديث التقدم
-        _stop_dl_progress.set()
-        try: _progress_task.cancel()
-        except: pass
-        
         # ═══ إرسال الملف — Direct Send أو Supabase Cloud Upload ═══
         #
         # 🔴 المسار الجديد (بدون تجربة جودة أقل — على طول السحابة):
@@ -3328,9 +3294,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                 except: pass
     
     except asyncio.TimeoutError:
-        _stop_dl_progress.set()
-        try: _progress_task.cancel()
-        except: pass
         logger.error("yt-dlp download timed out")
         try:
             await status_msg.edit_text("❌ انتهى وقت التحميل. جرب جودة أقل." if lang == "ar" else "❌ Download timed out. Try a lower quality.")

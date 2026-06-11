@@ -1700,28 +1700,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
             info = None
             last_error = None
             
-            # 🔴 FIX: Progress updater — نحدث رسالة الحالة كل 20 ثانية عشان المستخدم يعرف إن التحميل شغال
-            import time as _time_mod
-            _wa_dl_start = _time_mod.time()
-            _wa_stop_progress = asyncio.Event()
-            
-            async def _wa_update_download_progress():
-                """تحديث حالة التحميل كل 20 ثانية"""
-                while not _wa_stop_progress.is_set():
-                    try:
-                        await asyncio.sleep(20)
-                    except:
-                        break
-                    if _wa_stop_progress.is_set():
-                        break
-                    elapsed = int(_time_mod.time() - _wa_dl_start)
-                    mins, secs = divmod(elapsed, 60)
-                    try:
-                        await _send_whatsapp_message(wa_id, f"⏳ التحميل مستمر... ({mins}:{secs:02d})")
-                    except:
-                        pass
-            
-            _wa_progress_task = asyncio.create_task(_wa_update_download_progress())
+            # Progress timer removed — no periodic updates
             
             # ═══ المرحلة 0: سيرفر التحميل الخاص (VPS بـ IP نظيف) ═══
             # 🔴 ده أفضل طريقة — السيرفر بيحمل من YouTube بـ IP نظيف ومبيحصلش حظر
@@ -1753,10 +1732,6 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                         if ds_result and ds_result.get("success"):
                                             logger.info(f"🖥️ WA Download Service succeeded!")
                                             
-                                            # 🔴 إيقاف تحديث التقدم
-                                            _wa_stop_progress.set()
-                                            try: _wa_progress_task.cancel()
-                                            except: pass
                                             
                                             # بعت الرابط للمستخدم
                                             cloud_msg = ds_result.get("cloud_msg", "")
@@ -2786,11 +2761,6 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 except Exception as e:
                     logger.warning(f"⚠️ Video check/conversion error: {e}")
             
-            # 🔴 إيقاف تحديث التقدم
-            _wa_stop_progress.set()
-            try: _wa_progress_task.cancel()
-            except: pass
-            
             # 🛡️ Safety: Comprehensive media safety check before sending
             try:
                 media_type = "audio" if is_audio_only else "video"
@@ -2955,16 +2925,10 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 pass
         
     except ImportError:
-        _wa_stop_progress.set()
-        try: _wa_progress_task.cancel()
-        except: pass
         logger.error("❌ yt-dlp not installed!")
         await _send_whatsapp_message(wa_id, "❌ تحميل الفيديوهات مش متاح دلوقتي. جرب تاني بعد شوية! 📥")
         await feedback.error()
     except asyncio.TimeoutError:
-        _wa_stop_progress.set()
-        try: _wa_progress_task.cancel()
-        except: pass
         await _send_whatsapp_message(wa_id, "❌ انتهى وقت التحميل. حاول مرة تانية! 📥")
         await feedback.error()
     except Exception as e:
