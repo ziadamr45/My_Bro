@@ -1285,7 +1285,11 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         tmpdir = tempfile.mkdtemp(prefix="mybro_wa_dl_")
         output_template = os.path.join(tmpdir, "%(title).80s.%(ext)s")
         
-        # 🔴 FIX: Threads — yt-dlp مش بيدعمه، نستخدم طريقة مخصصة
+        # 🔴 FIX v2: Threads — yt-dlp مش بيدعمه، نستخدم طريقة مخصصة
+        # بنسجل info وبنسيب المسار الرئيسي يكمل — كده الملف بيمر بنفس المعالجة
+        # (ffprobe + h264 re-encode + quality fallback) زي كل المنصات التانية
+        info = None  # 🔴 نعرف info هنا عشان Threads يقدر يسيبها للمسار الرئيسي
+        
         if is_threads:
             logger.info(f"🧵 WhatsApp: Threads detected — using custom download method")
             try:
@@ -1296,50 +1300,30 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
             threads_result = await _download_threads_media_wa(url, tmpdir)
             
             if threads_result and threads_result.get("success"):
-                file_path = threads_result["file_path"]
-                file_size = threads_result.get("file_size", os.path.getsize(file_path))
                 real_title = threads_result.get("title", "Threads Post")
-                is_video = threads_result.get("is_video", True)
-                size_mb = file_size / (1024 * 1024)
+                is_video_threads = threads_result.get("is_video", True)
+                threads_file_size = threads_result.get("file_size", 0)
                 
-                # 🔴 FIX: نستخدم _send_whatsapp_document زي المسار الرئيسي بالظبط
-                # لأن _send_whatsapp_video مش موجودة كدالة!
-                try:
-                    with open(file_path, 'rb') as f:
-                        file_bytes = f.read()
-                    
-                    if is_video:
-                        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', real_title[:50]) + '.mp4'
-                        caption = f"🧵 {real_title[:200]}\n📥 Threads | {size_mb:.1f}MB"
-                        result = await _send_whatsapp_document(
-                            wa_id, file_bytes, safe_filename, caption, "video/mp4"
-                        )
-                    else:
-                        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', real_title[:50]) + '.jpg'
-                        caption = f"🧵 {real_title[:200]}\n📥 Threads"
-                        result = await _send_whatsapp_document(
-                            wa_id, file_bytes, safe_filename, caption, "image/jpeg"
-                        )
-                    
-                    if "error" not in result:
-                        increment_usage(wa_user_id, "downloads")
-                        try: track_event("media_downloads")
-                        except: pass
-                        await feedback.success()
-                        try: os.remove(file_path)
-                        except: pass
-                        return
-                    else:
-                        logger.warning(f"⚠️ Threads WA document send failed: {result.get('error')}")
-                except Exception as send_err:
-                    logger.warning(f"⚠️ Threads WA send error: {send_err}")
+                # 🔴 FIX v2: بنسجل info وبنسيب المسار الرئيسي يكمل الإرسال
+                # كده الملف بيمر بـ ffprobe check + h264 re-encode + quality fallback
+                # زي كل المنصات التانية — مش بنعمل send يدوي هنا
+                info = {
+                    "title": real_title,
+                    "duration": 0,
+                    "height": 720,
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                    "requested_downloads": [{"height": 720, "vcodec": "h264", "acodec": "aac"}],
+                }
                 
-                # Send failed
-                await _send_whatsapp_message(wa_id, f"❌ فشل إرسال الملف من Threads. جرب تاني!")
-                await feedback.error()
-                try: os.remove(file_path)
-                except: pass
-                return
+                # 🔴 الملف اتحمل في tmpdir — المسار الرئيسي هيلقيه هناك
+                threads_file_path = threads_result["file_path"]
+                if os.path.exists(threads_file_path):
+                    logger.info(f"✅ Threads WA download succeeded via {threads_result.get('method', 'unknown')} — "
+                               f"video={is_video_threads}, size={threads_file_size // 1024}KB, sending through main flow")
+                else:
+                    logger.warning(f"⚠️ Threads WA: Downloaded file not found at {threads_file_path}")
+                    info = None
             else:
                 logger.warning("🧵 Threads WA custom method failed, trying yt-dlp...")
         
@@ -1348,6 +1332,12 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         # نفس ترتيب التليجرام بالظبط
         # ═══════════════════════════════════════════════════════════════
         
+        # 🔴 FIX v2: متغيرات مشتركة — لازم تكون معرفة قبل الـ try block
+        # عشان الكود اللي بعد كده (ffprobe + h264 re-encode) يقدر يستخدمها
+        # حتى لو Threads هو اللي حمّل الملف (مش yt-dlp)
+        is_audio_only = (quality == "audio")
+        is_facebook_family = platform in ("facebook", "instagram", "threads")
+        
         # ═══ المرحلة 1: yt-dlp + deno + remote_components (الأفضل!) ═══
         # 🔴 الكوكيز الوهمية اتشالت — بنستخدم headers نظيفة فقط
         # 🔴 بنستخدم cookies.txt لو موجود — الحل الأقوى
@@ -1355,12 +1345,6 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         try:
             # yt-dlp options — with multi-quality support (like Telegram)
             # WhatsApp limit: ~100MB for media
-            
-            # Quality format strings (like Telegram's download_handlers)
-            is_audio_only = (quality == "audio")
-            
-            # 🔴 FIX v9: Facebook family format + acodec!=none + no filesize limit
-            is_facebook_family = platform in ("facebook", "instagram", "threads")
             
             if is_audio_only:
                 format_str = 'bestaudio/best'
@@ -1488,34 +1472,37 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
             
             # Download video — Multi-stage approach
             loop = asyncio.get_event_loop()
-            info = None
+            # 🔴 FIX v2: لو Threads حمّل الملف، info مش None — مش نعملش overwrite
+            # info معرّف قبل الـ Threads block — لو Threads نجح يبقى info فيه البيانات
             last_error = None
             
             # ═══ المرحلة 1: yt-dlp مباشر + deno + remote_components (الأفضل) ═══
-            try:
-                def _run_ytdlp():
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=True)
-                        return info
-                
-                info = await asyncio.wait_for(
-                    loop.run_in_executor(None, _run_ytdlp),
-                    timeout=300  # 5 minutes max
-                )
-                if info:
-                    logger.info(f"✅ yt-dlp download succeeded directly (deno + remote_components)")
-            except Exception as e:
-                last_error = e
-                logger.warning(f"⚠️ yt-dlp direct download failed: {e}")
-                # 🔴 لو YouTube حجبنا — حدث yt-dlp فوراً
-                err_str = str(e).lower()
-                if any(kw in err_str for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
-                    logger.warning("🔴 YouTube bot detection in WA! Triggering yt-dlp update...")
-                    try:
-                        from handlers.download_handlers import trigger_ytdlp_update
-                        trigger_ytdlp_update()
-                    except Exception:
-                        pass
+            # 🔴 FIX v2: نتخطى yt-dlp لو Threads حمّل الملف بالفعل
+            if info is None:
+                try:
+                    def _run_ytdlp():
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(url, download=True)
+                            return info
+                    
+                    info = await asyncio.wait_for(
+                        loop.run_in_executor(None, _run_ytdlp),
+                        timeout=300  # 5 minutes max
+                    )
+                    if info:
+                        logger.info(f"✅ yt-dlp download succeeded directly (deno + remote_components)")
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"⚠️ yt-dlp direct download failed: {e}")
+                    # 🔴 لو YouTube حجبنا — حدث yt-dlp فوراً
+                    err_str = str(e).lower()
+                    if any(kw in err_str for kw in ["sign in", "bot", "captcha", "confirm", "login", "403"]):
+                        logger.warning("🔴 YouTube bot detection in WA! Triggering yt-dlp update...")
+                        try:
+                            from handlers.download_handlers import trigger_ytdlp_update
+                            trigger_ytdlp_update()
+                        except Exception:
+                            pass
             
             # ═══ المرحلة 2: yt-dlp player_client fallback chain (زي التليجرام) ═══
             if info is None:
