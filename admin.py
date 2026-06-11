@@ -448,10 +448,22 @@ async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TY
             "🔑 <b>اختصارات المدة:</b>\n"
             "d = يوم | w = أسبوع | m = شهر | y = سنة\n"
             "0 أو دائم = مدى الحياة\n\n"
+            "🔄 <b>تجديد Premium:</b>\n"
+            "<code>/grant force m user_id</code> — تجديد حتى لو Premium\n\n"
             "مثال: <code>/grant m 123456789</code>\n"
             "مثال: <code>/grant w2 123456789</code>",
             parse_mode="HTML"
         )
+        return
+
+    # 🔴 فحص كلمة force — عشان تجديد Premium للمستخدم اللي أصلاً Premium
+    force_renew = False
+    if args[0].lower() == "force":
+        force_renew = True
+        args = args[1:]  # شيل كلمة force من المعاملات
+
+    if not args:
+        await update.message.reply_text("❌ لازم تحدد user_id بعد force. مثال: /grant force m 123456789")
         return
 
     # تحليل المعاملات
@@ -500,12 +512,14 @@ async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     # تفعيل Premium
     try:
-        from premium import grant_premium, get_user_plan
+        from premium import grant_premium, get_premium_info
         from memory import _ensure_user_in_db
 
         _ensure_user_in_db(target_id)
-        grant_premium(target_id, granted_by=f"admin_{user_id}", expires=expires)
-
+        
+        # 🔴 فحص هل المستخدم أصلاً Premium
+        current_info = get_premium_info(target_id)
+        
         # محاولة جلب اسم المستخدم
         try:
             from memory import get_user
@@ -516,14 +530,55 @@ async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TY
 
         name_display = f" ({target_name})" if target_name else ""
 
-        await update.message.reply_text(
-            f"✅ <b>تم تفعيل Premium!</b>\n\n"
-            f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
-            f"⭐ الخطة: Premium\n"
-            f"⏰ المدة: {expires_display}\n"
-            f"🔑 التفعيل بواسطة: @ziadamr",
-            parse_mode="HTML"
-        )
+        if current_info["is_premium"] and not force_renew:
+            # المستخدم أصلاً Premium — نقول للأدمن ونعرض معلوماته
+            current_expires = current_info["expires_display"]
+            current_since = current_info["premium_since"][:10] if current_info["premium_since"] else "مش محدد"
+            
+            # 🔴 هل المدة الجديدة أطول من الحالية؟ لو آه → تجديد
+            # لو لأ → نقول للأدمن إنه أصلاً Premium
+            await update.message.reply_text(
+                f"⚠️ <b>المستخدم ده أصلاً Premium!</b>\n\n"
+                f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+                f"⭐ الخطة الحالية: Premium\n"
+                f"📅 مفعل من: {current_since}\n"
+                f"⏰ المتبقي: {current_expires}\n\n"
+                f"━━━━━━━━━━━━━━━━━\n\n"
+                f"🔄 <b>عايز تجدده؟</b>\n"
+                f"المدة الجديدة: {expires_display}\n\n"
+                f"لو عايز تجدده / تطيل مدته، اكتب:\n"
+                f"<code>/grant force {' '.join(context.args[1:]) if len(context.args) > 1 else str(target_id)}</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        # تفعيل أو تجديد Premium
+        if force_renew and current_info["is_premium"]:
+            # تجديد — نقول للأدمن إنه جدّد
+            old_expires = current_info["expires_display"]
+            grant_premium(target_id, granted_by=f"admin_{user_id}", expires=expires)
+            await update.message.reply_text(
+                f"🔄 <b>تم تجديد Premium!</b>\n\n"
+                f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+                f"⭐ الخطة: Premium\n"
+                f"⏰ المدة القديمة: {old_expires}\n"
+                f"⏰ المدة الجديدة: {expires_display}\n"
+                f"🔑 التجديد بواسطة: @ziadamr",
+                parse_mode="HTML"
+            )
+        else:
+            # المستخدم Free → تفعيل عادي
+            grant_premium(target_id, granted_by=f"admin_{user_id}", expires=expires)
+
+            await update.message.reply_text(
+                f"✅ <b>تم تفعيل Premium!</b>\n\n"
+                f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+                f"📊 الخطة السابقة: Free\n"
+                f"⭐ الخطة الجديدة: Premium\n"
+                f"⏰ المدة: {expires_display}\n"
+                f"🔑 التفعيل بواسطة: @ziadamr",
+                parse_mode="HTML"
+            )
 
         # محاولة إرسال رسالة للمستخدم (عبر المنصة الصح — تليجرام أو واتساب)
         try:
@@ -591,15 +646,51 @@ async def revoke_premium_command(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     try:
-        from premium import revoke_premium, get_user_plan
+        from premium import revoke_premium, get_premium_info
 
-        old_plan = get_user_plan(target_id)
+        current_info = get_premium_info(target_id)
+        
+        # 🔴 فحص هل المستخدم أصلاً مش Premium
+        if not current_info["is_premium"]:
+            # محاولة جلب اسم المستخدم
+            try:
+                from memory import get_user
+                user_data = get_user(target_id)
+                target_name = user_data.get("name", "")
+            except Exception:
+                target_name = ""
+            name_display = f" ({target_name})" if target_name else ""
+            
+            await update.message.reply_text(
+                f"⚠️ <b>المستخدم ده أصلاً مش Premium!</b>\n\n"
+                f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+                f"📊 الخطة الحالية: Free\n\n"
+                f"مفيش حاجة تتشيل — المستخدم على الخطه المجانيه بالفعل.",
+                parse_mode="HTML"
+            )
+            return
+
+        # المستخدم Premium → شيله
+        old_expires = current_info["expires_display"]
+        old_since = current_info["premium_since"][:10] if current_info["premium_since"] else "مش محدد"
+        
+        # محاولة جلب اسم المستخدم
+        try:
+            from memory import get_user
+            user_data = get_user(target_id)
+            target_name = user_data.get("name", "")
+        except Exception:
+            target_name = ""
+        name_display = f" ({target_name})" if target_name else ""
+        
         revoke_premium(target_id)
 
         await update.message.reply_text(
             f"✅ <b>تم شيل Premium</b>\n\n"
-            f"👤 المستخدم: <code>{target_id}</code>\n"
-            f"📊 الخطة القديمة: {old_plan}\n"
+            f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+            f"📊 الخطة القديمة: Premium\n"
+            f"📅 كان مفعل من: {old_since}\n"
+            f"⏰ كان المتبقي: {old_expires}\n"
             f"📊 الخطة الجديدة: Free",
             parse_mode="HTML"
         )
@@ -654,14 +745,37 @@ async def resetlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     try:
-        from premium import reset_user_usage, get_user_plan, get_usage
+        from premium import reset_user_usage, get_user_plan, get_usage, get_premium_info
         from memory import _ensure_user_in_db
 
         # التأكد إن المستخدم موجود
         _ensure_user_in_db(target_id)
 
         # معرفة الخطة الحالية
-        plan = get_user_plan(target_id)
+        current_info = get_premium_info(target_id)
+        plan = current_info["plan"]
+        
+        # 🔴 فحص هل المستخدم Premium — لو آه، الريست مش هيعمل حاجة لأنه unlimited
+        if current_info["is_premium"]:
+            # محاولة جلب اسم المستخدم
+            try:
+                from memory import get_user
+                user_data = get_user(target_id)
+                target_name = user_data.get("name", "")
+            except Exception:
+                target_name = ""
+            name_display = f" ({target_name})" if target_name else ""
+            
+            await update.message.reply_text(
+                f"⚠️ <b>المستخدم ده Premium — مش محتاج ريست!</b>\n\n"
+                f"👤 المستخدم: <code>{target_id}</code>{name_display}\n"
+                f"⭐ الخطة: Premium\n"
+                f"⏰ المتبقي: {current_info['expires_display']}\n\n"
+                f"المستخدمين Premium استخدامهم غير محدود — مفيش حدود تتأثر بالريست.\n\n"
+                f"لو عايز تشيل البريميوم، استخدم: <code>/revoke {target_id}</code>",
+                parse_mode="HTML"
+            )
+            return
         
         # جلب الاستخدام الحالي قبل الريست
         old_usage = get_usage(target_id)
@@ -802,7 +916,7 @@ async def userinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         from memory import get_user, get_interests, get_favorite_companies, get_learning_progress
-        from premium import get_user_plan, get_usage
+        from premium import get_user_plan, get_usage, get_premium_info
         import json
 
         user_data = get_user(target_id)
@@ -811,6 +925,20 @@ async def userinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         interests = get_interests(target_id)
         companies = get_favorite_companies(target_id)
         learning = get_learning_progress(target_id)
+        
+        # 🔴 معلومات Premium مفصلة
+        premium_info = get_premium_info(target_id)
+        
+        plan_display = "⭐ Premium" if plan in ("premium", "premium_plus") else "🆓 Free"
+        
+        if premium_info["is_premium"]:
+            premium_details = f"""
+⭐ <b>Premium:</b> {plan_display}
+📅 <b>مفعل من:</b> {premium_info['premium_since'][:10] if premium_info['premium_since'] else 'مش محدد'}
+⏰ <b>المتبقي:</b> {premium_info['expires_display']}
+🔑 <b>بواسطة:</b> {premium_info['granted_by'] or 'مش محدد'}"""
+        else:
+            premium_details = f"\n⭐ <b>Premium:</b> 🆓 Free"
 
         info = f"""👤 <b>معلومات المستخدم</b>
 ━━━━━━━━━━━━━━━━━
@@ -818,7 +946,7 @@ async def userinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🆔 <b>ID:</b> <code>{target_id}</code>
 📝 <b>الاسم:</b> {user_data.get('name', 'مش محدد')}
 🌐 <b>اللغة:</b> {'العربية' if user_data.get('language') == 'ar' else 'English'}
-⭐ <b>الخطة:</b> {plan.upper()}
+{premium_details}
 📬 <b>مشترك أخبار:</b> {'نعم' if user_data.get('subscribed') else 'لا'}
 ⏰ <b>وقت الأخبار:</b> {user_data.get('news_time', '09:00')}
 💬 <b>محادثات:</b> {user_data.get('chat_count', 0)}
@@ -1035,18 +1163,19 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("❌ خطأ في ID", show_alert=True)
             return
 
-        from premium import get_user_plan, grant_premium, revoke_premium
+        from premium import get_premium_info, grant_premium, revoke_premium
 
-        current_plan = get_user_plan(target_id)
-        if current_plan == "premium":
+        current_info = get_premium_info(target_id)
+        if current_info["is_premium"]:
             if is_admin(target_id):
                 await query.answer("👑 مينفعش تشيل Premium من الأدمن!", show_alert=True)
                 return
+            old_expires = current_info["expires_display"]
             revoke_premium(target_id)
-            await query.answer("❌ تم شيل Premium", show_alert=True)
+            await query.answer(f"❌ تم شيل Premium (كان: {old_expires})", show_alert=True)
         else:
             grant_premium(target_id, granted_by=f"admin_{user_id}", expires=None)
-            await query.answer("⭐ تم تفعيل Premium!", show_alert=True)
+            await query.answer("⭐ تم تفعيل Premium مدى الحياة!", show_alert=True)
 
         # تحديث الرسالة
         await userinfo_callback_refresh(query, context, target_id)

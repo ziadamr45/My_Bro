@@ -5628,12 +5628,22 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
     try:
         if cmd in ("/grant",):
             if not args:
-                await _send_whatsapp_message(wa_id, "⭐ الاستخدام: /grant [مدة] رقم_الواتساب\nمثال: /grant 201203551789\nمثال: /grant m 201203551789\nمثال: /grant w 201203551789\nمثال: /grant y 201203551789")
+                await _send_whatsapp_message(wa_id, "⭐ الاستخدام: /grant [مدة] رقم_الواتساب\nمثال: /grant 201203551789\nمثال: /grant m 201203551789\nمثال: /grant w 201203551789\nمثال: /grant y 201203551789\n\n🔄 تجديد: /grant force m 201203551789")
                 return
 
-            from premium import grant_premium
+            from premium import grant_premium, get_premium_info
             from memory import _ensure_user_in_db
             from admin import parse_duration
+
+            # 🔴 فحص كلمة force — عشان تجديد Premium
+            force_renew = False
+            if args[0].lower() == "force":
+                force_renew = True
+                args = args[1:]
+
+            if not args:
+                await _send_whatsapp_message(wa_id, "❌ لازم تحدد رقم الواتساب. مثال: /grant force m 201203551789")
+                return
 
             if len(args) == 1:
                 # /grant phone → مدى الحياة
@@ -5664,8 +5674,33 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
                 expires = expires_date.isoformat()
                 expires_display += f" (ينتهي {expires_date.strftime('%Y-%m-%d')})"
 
-            grant_premium(target_id, granted_by=f"admin_{wa_user_id}", expires=expires)
-            await _send_whatsapp_message(wa_id, f"✅ تم تفعيل Premium!\n\n📱 المستخدم: {_wa_phone_to_display(phone)}\n⭐ الخطة: Premium\n⏰ المدة: {expires_display}")
+            # 🔴 فحص هل المستخدم أصلاً Premium
+            current_info = get_premium_info(target_id)
+            
+            if current_info["is_premium"] and not force_renew:
+                # المستخدم أصلاً Premium — نقول للأدمن
+                current_expires = current_info["expires_display"]
+                current_since = current_info["premium_since"][:10] if current_info["premium_since"] else "مش محدد"
+                await _send_whatsapp_message(wa_id,
+                    f"⚠️ المستخدم ده أصلاً Premium!\n\n"
+                    f"📱 المستخدم: {_wa_phone_to_display(phone)}\n"
+                    f"⭐ الخطة: Premium\n"
+                    f"📅 مفعل من: {current_since}\n"
+                    f"⏰ المتبقي: {current_expires}\n\n"
+                    f"🔄 عايز تجدده؟ اكتب:\n"
+                    f"/grant force {' '.join(parts[2:]) if len(parts) > 2 else phone}"
+                )
+                return
+
+            if force_renew and current_info["is_premium"]:
+                # تجديد
+                old_expires = current_info["expires_display"]
+                grant_premium(target_id, granted_by=f"admin_{wa_user_id}", expires=expires)
+                await _send_whatsapp_message(wa_id, f"🔄 تم تجديد Premium!\n\n📱 المستخدم: {_wa_phone_to_display(phone)}\n⭐ الخطة: Premium\n⏰ المدة القديمة: {old_expires}\n⏰ المدة الجديدة: {expires_display}")
+            else:
+                # تفعيل جديد
+                grant_premium(target_id, granted_by=f"admin_{wa_user_id}", expires=expires)
+                await _send_whatsapp_message(wa_id, f"✅ تم تفعيل Premium!\n\n📱 المستخدم: {_wa_phone_to_display(phone)}\n📊 الخطة السابقة: Free\n⭐ الخطة الجديدة: Premium\n⏰ المدة: {expires_display}")
             
             # 🔴 إرسال إشعار للمستخدم المستهدف
             try:
@@ -5699,9 +5734,18 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
                 return
             phone = args[0]
             target_id = _wa_phone_to_user_id(phone)
-            from premium import revoke_premium
+            from premium import revoke_premium, get_premium_info
+            
+            # 🔴 فحص هل المستخدم أصلاً مش Premium
+            current_info = get_premium_info(target_id)
+            if not current_info["is_premium"]:
+                await _send_whatsapp_message(wa_id, f"⚠️ المستخدم {_wa_phone_to_display(phone)} أصلاً مش Premium — على الخطه المجانيه بالفعل!")
+                return
+            
+            # المستخدم Premium → شيله
+            old_expires = current_info["expires_display"]
             revoke_premium(target_id)
-            await _send_whatsapp_message(wa_id, f"✅ تم شيل Premium من {_wa_phone_to_display(phone)}")
+            await _send_whatsapp_message(wa_id, f"✅ تم شيل Premium من {_wa_phone_to_display(phone)}\n\n📅 كان المتبقي: {old_expires}\n📊 الخطة الجديدة: Free")
             
             # 🔴 إرسال إشعار للمستخدم المستهدف
             try:
@@ -5719,7 +5763,14 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
                 return
             phone = args[0]
             target_id = _wa_phone_to_user_id(phone)
-            from premium import reset_user_usage
+            from premium import reset_user_usage, get_premium_info
+            
+            # 🔴 فحص هل المستخدم Premium — لو آه، الريست مش هيعمل حاجة
+            current_info = get_premium_info(target_id)
+            if current_info["is_premium"]:
+                await _send_whatsapp_message(wa_id, f"⚠️ المستخدم {_wa_phone_to_display(phone)} Premium — استخدام غير محدود أصلاً!\n\nمفيش حدود تتأثر بالريست.\nلو عايز تشيل البريميوم: /revoke {phone}")
+                return
+            
             success = reset_user_usage(target_id)
             if success:
                 await _send_whatsapp_message(wa_id, f"✅ تم إعادة تعيين حدود {_wa_phone_to_display(phone)}")
@@ -5742,6 +5793,15 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
             phone = args[0]
             target_id = _wa_phone_to_user_id(phone)
             reason = " ".join(args[1:]) if len(args) > 1 else "حظر من الأدمن"
+            
+            # 🔴 فحص هل المستخدم محظور بالفعل
+            from memory import _execute as _mem_execute, _is_postgres as _mem_is_postgres
+            ph = "%s" if _mem_is_postgres() else "?"
+            already_banned = _mem_execute(f"SELECT user_id FROM banned_users WHERE user_id = {ph}", (target_id,), fetchone=True)
+            if already_banned:
+                await _send_whatsapp_message(wa_id, f"⚠️ المستخدم {_wa_phone_to_display(phone)} محظور بالفعل!")
+                return
+            
             from memory import ban_user
             ban_user(target_id, reason=reason, banned_by=f"admin_{wa_user_id}")
             await _send_whatsapp_message(wa_id, f"🚫 تم حظر {_wa_phone_to_display(phone)}\n📝 السبب: {reason}")
@@ -5761,7 +5821,15 @@ async def _handle_admin_with_args(wa_id: str, content: str, wa_user_id: int, con
                 return
             phone = args[0]
             target_id = _wa_phone_to_user_id(phone)
-            from memory import unban_user
+            
+            # 🔴 فحص هل المستخدم محظور أصلاً
+            from memory import _execute as _mem_execute2, _is_postgres as _mem_is_postgres2, unban_user
+            ph = "%s" if _mem_is_postgres2() else "?"
+            is_banned = _mem_execute2(f"SELECT user_id FROM banned_users WHERE user_id = {ph}", (target_id,), fetchone=True)
+            if not is_banned:
+                await _send_whatsapp_message(wa_id, f"⚠️ المستخدم {_wa_phone_to_display(phone)} مش محظور أصلاً!")
+                return
+            
             unban_user(target_id)
             await _send_whatsapp_message(wa_id, f"✅ تم إلغاء حظر {_wa_phone_to_display(phone)}")
             

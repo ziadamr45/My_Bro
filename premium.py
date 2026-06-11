@@ -334,6 +334,69 @@ def is_premium(user_id: int) -> bool:
     return plan in ("premium", "premium_plus")
 
 
+def get_premium_info(user_id: int) -> dict:
+    """الحصول على معلومات الاشتراك Premium كاملة
+    
+    Returns: {
+        "plan": str,           # "free", "premium", "premium_plus"
+        "is_premium": bool,    # هل هو بريميوم
+        "premium_since": str,  # متى بدأ البريميوم
+        "premium_expires": str,# متى بينتهي (None = مدى الحياة)
+        "granted_by": str,     # مين فعله
+        "expires_display": str,# عرض نصي لتاريخ الانتهاء
+        "remaining_days": int, # كم يوم باقي (0 = مدى الحياة أو خلص, -1 = مش بريميوم)
+    }
+    """
+    from memory import _ensure_user_in_db
+    _ensure_user_in_db(user_id)
+    
+    ph = "%s" if _is_postgres() else "?"
+    row = _execute(
+        f"SELECT plan, premium_since, premium_expires, granted_by FROM premium_users WHERE user_id = {ph}",
+        (user_id,), fetchone=True
+    )
+    
+    result = {
+        "plan": "free",
+        "is_premium": False,
+        "premium_since": None,
+        "premium_expires": None,
+        "granted_by": None,
+        "expires_display": "—",
+        "remaining_days": -1,
+    }
+    
+    if row:
+        result["plan"] = row[0]
+        result["is_premium"] = row[0] in ("premium", "premium_plus")
+        result["premium_since"] = row[1]
+        result["premium_expires"] = row[2]
+        result["granted_by"] = row[3]
+    
+    if result["is_premium"]:
+        if result["premium_expires"]:
+            try:
+                expires_dt = datetime.fromisoformat(result["premium_expires"])
+                now = datetime.now(CAIRO_TZ)
+                remaining = expires_dt - now
+                result["remaining_days"] = max(0, remaining.days)
+                if remaining.days > 0:
+                    result["expires_display"] = f"{remaining.days} يوم (ينتهي {expires_dt.strftime('%Y-%m-%d')})"
+                else:
+                    hours_left = max(0, remaining.seconds // 3600)
+                    if hours_left > 0:
+                        result["expires_display"] = f"أقل من يوم ({hours_left} ساعة — ينتهي {expires_dt.strftime('%Y-%m-%d %H:%M')})"
+                    else:
+                        result["expires_display"] = f"بينتهي قريب ({expires_dt.strftime('%Y-%m-%d')})"
+            except Exception:
+                result["expires_display"] = result["premium_expires"][:10] if result["premium_expires"] else "—"
+        else:
+            result["remaining_days"] = 0  # 0 = مدى الحياة
+            result["expires_display"] = "مدى الحياة 🔓"
+    
+    return result
+
+
 def grant_premium(user_id: int, granted_by: str = "admin", expires: str = None, plan: str = "premium"):
     """Grant premium to a user"""
     from memory import _ensure_user_in_db
