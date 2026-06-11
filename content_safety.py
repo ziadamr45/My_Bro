@@ -41,8 +41,14 @@ SAFETY_THRESHOLD = int(os.environ.get("CONTENT_SAFETY_THRESHOLD", "70"))
 # تفعيل/تعطيل النظام (عشان نقدر نطفيه لو فيه مشاكل)
 CONTENT_SAFETY_ENABLED = os.environ.get("CONTENT_SAFETY_ENABLED", "true").lower() == "true"
 
-# عدد فريمات اللي بنسحبها من الفيديو للفحص
-VIDEO_FRAME_COUNT = 3
+# عدد فريمات اللي بنسحبها من الفيديو للفحص (2 بدل 3 عشان السرعة)
+VIDEO_FRAME_COUNT = int(os.environ.get("CONTENT_SAFETY_FRAMES", "2"))
+
+# ⏱️ Timeout لإجراءات الأمان (بالثواني)
+SAFETY_AI_TIMEOUT = 10       # timeout لكل AI call
+SAFETY_VLM_TIMEOUT = 15      # timeout لكل VLM call
+SAFETY_VIDEO_TIMEOUT = 30    # timeout كلي لفحص الفيديو
+SAFETY_TOTAL_TIMEOUT = 45    # timeout كلي للفحص الشامل
 
 # أقصى حجم للصورة اللي نبعتها للـ VLM (bytes) — 5MB
 MAX_IMAGE_SIZE_FOR_VLM = 5 * 1024 * 1024
@@ -229,22 +235,23 @@ If BLOCKED, add a brief reason on the same line after a colon.
 Example: BLOCKED: requesting nude content
 Example: SAFE"""
 
-        result = await call_ai(
-            prompt=query,
-            system_prompt=system_prompt,
-            task_type="simple",
-            temperature=0.1,  # Very low temperature for consistent classification
-            max_tokens=50,
+        result = await asyncio.wait_for(
+            call_ai(
+                prompt=query,
+                system_prompt=system_prompt,
+                task_type="simple",
+                temperature=0.1,
+                max_tokens=50,
+            ),
+            timeout=SAFETY_AI_TIMEOUT,
         )
 
         if not result:
-            # لو الـ AI مش متاح — نعتمد على الكلمات المفتاحية بس
             return False, ""
 
         result = result.strip().upper()
 
         if result.startswith("BLOCKED"):
-            # استخراج السبب
             reason = ""
             if ":" in result:
                 reason = result.split(":", 1)[1].strip()
@@ -254,9 +261,17 @@ Example: SAFE"""
 
         return False, ""
 
+    except asyncio.TimeoutError:
+        logger.warning(f"🛡️ AI query check timed out ({SAFETY_AI_TIMEOUT}s), passing through")
+        return False, ""
     except Exception as e:
         logger.warning(f"🛡️ AI query check failed: {e}")
         return False, ""
+
+
+def _is_url(query: str) -> bool:
+    """كشف هل الاستعلام عبارة عن URL"""
+    return bool(re.match(r'https?://', query.strip(), re.IGNORECASE))
 
 
 async def check_query_safety(
@@ -269,6 +284,9 @@ async def check_query_safety(
     🔴 المسار:
     1. فحص الكلمات المفتاحية (فوري — بدون AI)
     2. لو الكلمات مش واضحة → فحص بالـ AI
+    
+    ⚡ تحسين: لو الاستعلام URL — بنفحص الكلمات المفتاحية بس بدون AI
+    (الـ URL نفسه مش بيوضح نية البحث — الفحص الحقيقي هيكون على العنوان والميديا)
     
     Returns: (is_safe, reason)
     - is_safe=True → نكمل عادي
@@ -292,7 +310,12 @@ async def check_query_safety(
         )
         return False, reason
 
-    # 2. فحص بالـ AI (للاستعلامات المش واضحة)
+    # 2. فحص بالـ AI — بس لو مش URL
+    # ⚡ لو URL — بنفحص الكلمات بس، فحص الميديا هيكون بعد التحميل
+    if _is_url(query):
+        logger.info("🛡️ URL detected — skipping AI query check, will check media after download")
+        return True, ""
+
     is_blocked_ai, reason_ai = await _check_query_with_ai(query)
     if is_blocked_ai:
         _log_blocked_request(
@@ -428,12 +451,15 @@ SAFE if:
 Respond with ONLY: BLOCKED or SAFE
 If BLOCKED, add reason after colon."""
 
-        result = await call_ai(
-            prompt=text_to_analyze,
-            system_prompt=system_prompt,
-            task_type="simple",
-            temperature=0.1,
-            max_tokens=50,
+        result = await asyncio.wait_for(
+            call_ai(
+                prompt=text_to_analyze,
+                system_prompt=system_prompt,
+                task_type="simple",
+                temperature=0.1,
+                max_tokens=50,
+            ),
+            timeout=SAFETY_AI_TIMEOUT,
         )
 
         if not result:
@@ -448,6 +474,9 @@ If BLOCKED, add reason after colon."""
 
         return False, ""
 
+    except asyncio.TimeoutError:
+        logger.warning(f"🛡️ AI result check timed out ({SAFETY_AI_TIMEOUT}s), passing through")
+        return False, ""
     except Exception as e:
         logger.warning(f"🛡️ AI result check failed: {e}")
         return False, ""
@@ -527,11 +556,14 @@ SCORE: <number>
 VERDICT: SAFE or UNSAFE
 REASON: <brief explanation>"""
 
-        result = await manager.analyze_image_async(
-            text_prompt=prompt,
-            image_base64=b64_image,
-            temperature=0.1,
-            max_tokens=100,
+        result = await asyncio.wait_for(
+            manager.analyze_image_async(
+                text_prompt=prompt,
+                image_base64=b64_image,
+                temperature=0.1,
+                max_tokens=100,
+            ),
+            timeout=SAFETY_VLM_TIMEOUT,
         )
 
         if not result:
@@ -553,6 +585,9 @@ REASON: <brief explanation>"""
 
         return True, "", safety_score
 
+    except asyncio.TimeoutError:
+        logger.warning(f"🛡️ Image safety VLM timed out ({SAFETY_VLM_TIMEOUT}s), passing through")
+        return True, "", 75
     except Exception as e:
         logger.error(f"🛡️ Image safety check error: {e}")
         return True, "", 75
@@ -598,17 +633,34 @@ async def check_video_safety(
             logger.info("🛡️ Could not extract video frames, relying on title analysis")
             return True, "", 75
 
-        # 3. تحليل كل فريم
+        # 3. تحليل كل الفريمات بالتوازي (بدل تباعي — أسرع 3x)
+        async def _check_frame(idx: int, frame_b64: str) -> tuple[int, bool, str, int]:
+            """فحص فريم واحد — returns (idx, is_safe, reason, score)"""
+            try:
+                is_safe, reason, score = await check_image_safety(
+                    image_base64=frame_b64,
+                    platform=platform,
+                    user_id=user_id,
+                )
+                return (idx, is_safe, reason, score)
+            except Exception as e:
+                logger.warning(f"🛡️ Frame {idx} check error: {e}")
+                return (idx, True, "", 75)
+
+        # شغالين كل الفريمات بالتوازي مع timeout كلي
+        try:
+            frame_results = await asyncio.wait_for(
+                asyncio.gather(*[_check_frame(i, f) for i, f in enumerate(frames)]),
+                timeout=SAFETY_VIDEO_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"🛡️ Video frame analysis timed out ({SAFETY_VIDEO_TIMEOUT}s), passing through")
+            return True, "", 75
+
         lowest_score = 100
         unsafe_reason = ""
 
-        for i, frame_b64 in enumerate(frames):
-            is_safe, reason, score = await check_image_safety(
-                image_base64=frame_b64,
-                platform=platform,
-                user_id=user_id,
-            )
-
+        for idx, is_safe, reason, score in frame_results:
             if score < lowest_score:
                 lowest_score = score
                 unsafe_reason = reason
@@ -616,7 +668,7 @@ async def check_video_safety(
             if not is_safe:
                 _log_blocked_request(
                     query=title[:100] if title else "",
-                    reason=f"Video frame {i+1} unsafe: {reason} (score={score})",
+                    reason=f"Video frame {idx+1} unsafe: {reason} (score={score})",
                     layer="L3_video_frame",
                     platform=platform,
                     user_id=user_id,
@@ -625,6 +677,9 @@ async def check_video_safety(
 
         return True, "", lowest_score
 
+    except asyncio.TimeoutError:
+        logger.warning(f"🛡️ Video safety check timed out, passing through")
+        return True, "", 75
     except Exception as e:
         logger.error(f"🛡️ Video safety check error: {e}")
         return True, "", 75
@@ -939,73 +994,81 @@ async def comprehensive_media_safety_check(
     if not CONTENT_SAFETY_ENABLED:
         return True, "", ""
 
-    # Layer 1: فحص الاستعلام
-    if query:
-        is_safe, reason = await check_query_safety(query, platform, user_id)
-        if not is_safe:
+    async def _run_safety_checks():
+        """الفحص الفعلي — مع إمكانية الـ timeout الكلي"""
+        # Layer 1: فحص الاستعلام
+        if query:
+            is_safe, reason = await check_query_safety(query, platform, user_id)
+            if not is_safe:
+                msg = get_block_message(lang, reason)
+                return False, msg, reason
+
+        # Layer 1b: فحص العنوان
+        if title:
+            is_blocked, reason = _check_keywords(title)
+            if is_blocked:
+                _log_blocked_request(
+                    query=title[:100],
+                    reason=f"Title blocked: {reason}",
+                    layer="L1_title",
+                    platform=platform,
+                    user_id=user_id,
+                )
+                msg = get_block_message(lang, reason)
+                return False, msg, reason
+
+        # Layer 3: فحص الميديا الفعلي
+        safety_score = 100
+        safety_reason = ""
+
+        if file_path and os.path.exists(file_path):
+            if file_type == "image":
+                is_safe, reason, score = await check_image_safety(
+                    image_path=file_path,
+                    platform=platform,
+                    user_id=user_id,
+                )
+                safety_score = score
+                safety_reason = reason
+                if not is_safe:
+                    msg = get_block_message(lang, reason)
+                    return False, msg, reason
+
+            elif file_type == "video":
+                is_safe, reason, score = await check_video_safety(
+                    video_path=file_path,
+                    title=title,
+                    platform=platform,
+                    user_id=user_id,
+                )
+                safety_score = score
+                safety_reason = reason
+                if not is_safe:
+                    msg = get_block_message(lang, reason)
+                    return False, msg, reason
+
+            elif file_type == "audio":
+                is_safe, reason, score = await check_audio_safety(
+                    title=title,
+                    platform=platform,
+                    user_id=user_id,
+                )
+                safety_score = score
+                safety_reason = reason
+                if not is_safe:
+                    msg = get_block_message(lang, reason)
+                    return False, msg, reason
+
+        # Layer 4: فحص درجة الأمان النهائية
+        is_approved, reason = check_safety_score(safety_score)
+        if not is_approved:
             msg = get_block_message(lang, reason)
-            return False, msg, reason
+            return False, msg, reason or safety_reason
 
-    # Layer 1b: فحص العنوان
-    if title:
-        is_blocked, reason = _check_keywords(title)
-        if is_blocked:
-            _log_blocked_request(
-                query=title[:100],
-                reason=f"Title blocked: {reason}",
-                layer="L1_title",
-                platform=platform,
-                user_id=user_id,
-            )
-            msg = get_block_message(lang, reason)
-            return False, msg, reason
+        return True, "", ""
 
-    # Layer 3: فحص الميديا الفعلي
-    safety_score = 100
-    safety_reason = ""
-
-    if file_path and os.path.exists(file_path):
-        if file_type == "image":
-            is_safe, reason, score = await check_image_safety(
-                image_path=file_path,
-                platform=platform,
-                user_id=user_id,
-            )
-            safety_score = score
-            safety_reason = reason
-            if not is_safe:
-                msg = get_block_message(lang, reason)
-                return False, msg, reason
-
-        elif file_type == "video":
-            is_safe, reason, score = await check_video_safety(
-                video_path=file_path,
-                title=title,
-                platform=platform,
-                user_id=user_id,
-            )
-            safety_score = score
-            safety_reason = reason
-            if not is_safe:
-                msg = get_block_message(lang, reason)
-                return False, msg, reason
-
-        elif file_type == "audio":
-            is_safe, reason, score = await check_audio_safety(
-                title=title,
-                platform=platform,
-                user_id=user_id,
-            )
-            safety_score = score
-            safety_reason = reason
-            if not is_safe:
-                msg = get_block_message(lang, reason)
-                return False, msg, reason
-
-    # Layer 4: فحص درجة الأمان النهائية
-    is_approved, reason = check_safety_score(safety_score)
-    if not is_approved:
-        msg = get_block_message(lang, reason)
-        return False, msg, reason or safety_reason
-
-    return True, "", ""
+    try:
+        return await asyncio.wait_for(_run_safety_checks(), timeout=SAFETY_TOTAL_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(f"🛡️ Comprehensive safety check timed out ({SAFETY_TOTAL_TIMEOUT}s), passing through")
+        return True, "", ""
