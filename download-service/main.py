@@ -5,12 +5,14 @@
 
 المسار:
 1. البوت يبعت URL + quality للسيرفر
-2. السيرفر بيحمل الفيديو بـ yt-dlp (IP نظيف = مفيش حظر)
-3. السيرفر بيرفع الفيديو على Supabase (streaming)
-4. السيرفر بيرجع رابط Supabase للبوت
-5. البوت يبعت الرابط للمستخدم
+2. السيرفر بيفحص الأمان (كلمات مفتاحية + عنوان)
+3. السيرفر بيحمل الفيديو بـ yt-dlp (IP نظيف = مفيش حظر)
+4. السيرفر بيرفع الفيديو على Supabase (streaming)
+5. السيرفر بيرجع رابط Supabase للبوت
+6. البوت يبعت الرابط للمستخدم
 
 🔴 مفيش تحميل في الرام — كله streaming!
+🛡️ نظام حماية المحتوى شغال على السيرفر!
 """
 
 import os
@@ -47,6 +49,10 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/").removesuffix("/res
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "Downloads")
 PORT = int(os.environ.get("PORT", "8080"))
+
+# 🛡️ Content Safety Settings
+CONTENT_SAFETY_ENABLED = os.environ.get("CONTENT_SAFETY_ENABLED", "true").lower() == "true"
+SAFETY_THRESHOLD = int(os.environ.get("CONTENT_SAFETY_THRESHOLD", "70"))
 
 # ═══ Size limits ═══
 PLATFORM_SIZE_LIMITS = {
@@ -85,6 +91,134 @@ QUALITY_FORMATS = {
 }
 
 QUALITY_LABELS = {"best": "1080p", "medium": "720p", "low": "480p", "audio": "MP3"}
+
+
+# ═══════════════════════════════════════
+# 🛡️ Content Safety — نظام الحماية
+# نفس النظام الصارم الموجود في البوت
+# ═══════════════════════════════════════
+
+# 🔴 كلمات ممنوعة بالعربي
+BLOCKED_KEYWORDS_AR = [
+    "سكس", "sex", "جنس", "نيك", "نياكة", "سكسي", "سكسى",
+    "بورنو", "porno", "porn", "بورن", "إباحي", "اباحي", "إباحية", "اباحية",
+    "عري", "عاري", "عرى", "عُري",
+    "عريان", "عريانه", "بزاز", "بز", "طيز", "كس", "قضيب", "حلمة",
+    "booty", "naked", "nude", "nsfw",
+    "اغتصاب", "rape", "تحرش", "harassment", "جنسية", "جنسي",
+    "شهوة", "شبق", "مثير", "اغراء", "إغراء",
+    "xxx", "xxxx", "18+", "عمر 18",
+    "حرام", "فاحش", "فاحشة", "رذيلة", "خليع", "خلاعة",
+    "مومس", "بغاء", "دعارة",
+    "موسيقى هاري", "رقص شرقي", "رقص مثير",
+    "twerk", "striptease", "lap dance",
+    "شرموط", "قحبة", "عاهرة", "شرموطة",
+    "فشخ", "منيك", "متناكة", "مص زب", "لحس",
+    "cam girl", "onlyfans", "webcam sex",
+    "hentai", "ياباني سكس", "أنمي سكس",
+]
+
+# 🔴 كلمات ممنوعة بالإنجليزي
+BLOCKED_KEYWORDS_EN = [
+    "porn", "porno", "pornography", "pornographic",
+    "sex", "sexual", "sexy", "nude", "naked", "nsfw",
+    "xxx", "hardcore", "softcore", "erotic", "erotica",
+    "hentai", "xvideos", "xhamster", "redtube", "youporn",
+    "onlyfans", "chaturbate", "cam girl", "camgirl",
+    "boobs", "breasts", "tits", "nipples", "pussy", "dick", "cock",
+    "penis", "vagina", "anus",
+    "fuck", "fucking", "fucked", "blowjob", "handjob", "creampie",
+    "orgasm", "cumshot", "ejaculation", "masturbat",
+    "rape", "molest", "incest", "bestiality", "zoophilia",
+    "striptease", "lap dance", "pole dance",
+    "twerk", "twerking",
+    "prostitute", "prostitution", "escort", "hooker", "whore",
+    "slut", "bitch", "cunt", "twat", "wank",
+    "deepfake nude", "undress ai", "nudify",
+]
+
+# 🔴 أنماط regex
+BLOCKED_PATTERNS = [
+    re.compile(r'\b(porn|porno|pornograph)\w*\b', re.IGNORECASE),
+    re.compile(r'\b(nude|naked|nsfw)\w*\b', re.IGNORECASE),
+    re.compile(r'\b(sex|sexy|sexual|sexually)\b', re.IGNORECASE),
+    re.compile(r'\b(xxx|xxxx)\b', re.IGNORECASE),
+    re.compile(r'\b(سكس|سكسي|سكسى|بورنو|بورن)\b', re.IGNORECASE),
+    re.compile(r'\b(عري|عاري|عريان|عرى)\b', re.IGNORECASE),
+    re.compile(r'\b(إباحي|اباحي|إباحية|اباحية)\b', re.IGNORECASE),
+    re.compile(r'\b(بزاز|طيز|قضيب|نيك)\b', re.IGNORECASE),
+    re.compile(r'\b(اغتصاب|تحرش|فاحش)\b', re.IGNORECASE),
+    re.compile(r'\b(hentai|onlyfans|chaturbate)\b', re.IGNORECASE),
+    re.compile(r'\b(18\+)\b'),
+]
+
+
+def _check_keywords(text: str) -> tuple[bool, str]:
+    """فحص الكلمات المفتاحية — صارم جداً"""
+    if not text:
+        return False, ""
+
+    text_lower = text.lower().strip()
+
+    # فحص الكلمات العربية
+    for kw in BLOCKED_KEYWORDS_AR:
+        if kw in text_lower:
+            return True, f"كلمة ممنوعة: {kw}"
+
+    # فحص الكلمات الإنجليزية
+    query_words = re.findall(r'\b\w+\b', text_lower)
+    for kw in BLOCKED_KEYWORDS_EN:
+        if kw in query_words:
+            return True, f"Blocked keyword: {kw}"
+        if len(kw) > 5 and kw in text_lower:
+            return True, f"Blocked keyword: {kw}"
+
+    # فحص أنماط regex
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.search(text):
+            return True, "نمط ممنوع"
+
+    return False, ""
+
+
+def check_content_safety(title: str = "", description: str = "", url: str = "") -> tuple[bool, str]:
+    """🛡️ فحص أمان المحتوى — صارم جداً على السيرفر
+    
+    بنفحص:
+    - عنوان الفيديو
+    - وصف الفيديو
+    - الـ URL نفسه
+    
+    ⚡ مفيش AI/VLM هنا — فحص كلمات مفتاحية فقط (سريع وموثوق)
+    الفحص بالـ AI/VLM بيحصل في البوت نفسه بعد التحميل
+    
+    Returns: (is_safe, reason)
+    """
+    if not CONTENT_SAFETY_ENABLED:
+        return True, ""
+
+    # فحص الـ URL
+    if url:
+        is_blocked, reason = _check_keywords(url)
+        if is_blocked:
+            logger.info(f"🛡️ Blocked by URL: {reason}")
+            return False, reason
+
+    # فحص العنوان
+    if title:
+        is_blocked, reason = _check_keywords(title)
+        if is_blocked:
+            logger.info(f"🛡️ Blocked by title: {reason}")
+            return False, reason
+
+    # فحص الوصف
+    if description:
+        is_blocked, reason = _check_keywords(description)
+        if is_blocked:
+            logger.info(f"🛡️ Blocked by description: {reason}")
+            return False, reason
+
+    return True, ""
 
 
 # ═══ Supabase Upload (Streaming) ═══
@@ -338,12 +472,12 @@ def _convert_to_h264(filepath: str) -> str:
 
 
 # ═══ FastAPI App ═══
-app = FastAPI(title="Download Service", version="1.0.0")
+app = FastAPI(title="Download Service", version="2.0.0")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "download-service", "version": "1.0.0"}
+    return {"status": "ok", "service": "download-service", "version": "2.0.0", "safety": "enabled" if CONTENT_SAFETY_ENABLED else "disabled"}
 
 
 @app.get("/download")
@@ -356,6 +490,8 @@ async def download(
 ):
     """
     Download a video and upload to Supabase.
+    
+    🛡️ Content safety: checks title/URL keywords BEFORE downloading.
     
     Returns the Supabase URL + metadata.
     The bot then sends this URL to the user.
@@ -371,6 +507,43 @@ async def download(
         raise HTTPException(status_code=400, detail=f"Invalid quality: {quality}. Use: best, medium, low, audio")
     
     logger.info(f"📥 Download request: url={url[:80]} quality={quality} platform={platform}")
+    
+    # 🛡️ Step 0: Content safety check — فحص الأمان قبل التحميل
+    # First, get video info to check the title
+    video_title = ""
+    video_description = ""
+    try:
+        info_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info:
+                video_title = info.get("title", "")
+                video_description = info.get("description", "") or ""
+    except Exception as e:
+        logger.warning(f"⚠️ Could not get video info for safety check: {e}")
+    
+    # فحص الأمان بالكلمات المفتاحية
+    is_safe, safety_reason = check_content_safety(
+        title=video_title,
+        description=video_description[:500] if video_description else "",
+        url=url,
+    )
+    
+    if not is_safe:
+        logger.info(f"🛡️ Content blocked: {safety_reason} | title={video_title[:50]}")
+        if lang == "ar":
+            block_msg = "عذرًا، لا أستطيع المساعدة في البحث أو تحميل هذا النوع من المحتوى. 🛡️"
+        else:
+            block_msg = "Sorry, I cannot help with downloading this type of content. 🛡️"
+        return JSONResponse(
+            status_code=403,
+            content={
+                "success": False,
+                "error": "content_blocked",
+                "message": block_msg,
+                "reason": safety_reason,
+            }
+        )
     
     # Create temp directory
     tmpdir = tempfile.mkdtemp(prefix="dl_svc_")
@@ -510,15 +683,27 @@ async def get_info(
             info = ydl.extract_info(url, download=False)
             if info:
                 formats = info.get("formats", [])
+                title = info.get("title", "")
+                description = info.get("description", "") or ""
+                
+                # 🛡️ Content safety check on info too
+                is_safe, safety_reason = check_content_safety(
+                    title=title,
+                    description=description[:500],
+                    url=url,
+                )
+                
                 return {
                     "success": True,
-                    "title": info.get("title", ""),
+                    "title": title,
                     "duration": info.get("duration", 0),
                     "thumbnail": info.get("thumbnail", ""),
                     "available_qualities": list(set(
                         f.get("height") for f in formats if f.get("height")
                     )),
                     "views": info.get("view_count", 0),
+                    "safe": is_safe,
+                    "safety_reason": safety_reason if not is_safe else "",
                 }
             return {"success": False, "error": "no_info"}
     except Exception as e:
@@ -527,7 +712,8 @@ async def get_info(
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"🚀 Download Service starting on port {PORT}")
+    logger.info(f"🚀 Download Service v2.0 starting on port {PORT}")
     logger.info(f"☁️ Supabase: {'✅ configured' if SUPABASE_URL else '❌ not configured'}")
     logger.info(f"🔑 API Key: {'✅ set' if API_KEY else '⚠️ not set (open access)'}")
+    logger.info(f"🛡️ Content Safety: {'✅ enabled' if CONTENT_SAFETY_ENABLED else '❌ disabled'}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
