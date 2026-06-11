@@ -1784,16 +1784,16 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
 
 
 async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: str, user_id: int, status_msg=None):
-    """تحميل فيديو أو صوت — مُحسّن v8 مع yt-dlp كأولوية
+    """تحميل فيديو أو صوت — مُحسّن v9 مع yt-dlp كأولوية
     
-    🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+    🔴 FIX v9: Cobalt API كـ fallback تالت (بعد player_client وقبل no-cookies)
     1. yt-dlp + deno + remote_components (الأفضل)
     2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
-    3. yt-dlp بدون كوكيز
-    4. Cobalt Public API (fallback)
+    3. 🟠 Cobalt API (fallback تالت — أسرع وأضمن من yt-dlp بدون كوكيز)
+    4. yt-dlp بدون كوكيز
     5. Invidious API (fallback)
     6. Piped API (fallback — زي Invidious بس سيرفرات مختلفة)
-    7. Cobalt Self-Hosted (fallback)
+    7. Cobalt JWT (fallback)
     8. Cloudflare Worker (آخر محاولة)
     """
     # تحديد الرسالة
@@ -1919,15 +1919,16 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
             pass
         
         # ═══════════════════════════════════════════════════════════════
-        # 🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+        # 🔴 FIX v9: yt-dlp هو الأولوية الأولى!
         # الترتيب الجديد:
         # 1. yt-dlp + deno + remote_components (الأفضل)
         # 2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
-        # 3. yt-dlp بدون كوكيز
-        # 4. Cobalt Public API (fallback)
+        # 3. 🟠 Cobalt API (fallback تالت — أسرع وأضمن)
+        # 4. yt-dlp بدون كوكيز
         # 5. Invidious API (fallback)
-        # 6. Cobalt Self-Hosted (fallback)
-        # 7. Cloudflare Worker (آخر محاولة)
+        # 6. Piped API (fallback)
+        # 7. Cobalt JWT (fallback)
+        # 8. Cloudflare Worker (آخر محاولة)
         # ═══════════════════════════════════════════════════════════════
         
         info = None
@@ -2010,9 +2011,122 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                         if not any(kw in err_str_retry for kw in bot_keywords):
                             break
                 
-                # ═══ المحاولة 3: كل الطرق فشلت — نجرب بدون كوكيز ═══
+                # ═══ المحاولة 3: Cobalt API (fallback تالت — أسرع وأضمن من yt-dlp بدون كوكيز) ═══
+                # 🔴 لو yt-dlp فشل مع player_clients → Cobalt أضمن من تجربة yt-dlp تاني
                 if info is None:
-                    logger.info("🔄 All methods with cookies failed, trying WITHOUT cookies...")
+                    logger.info("🟠 yt-dlp player_clients failed, trying Cobalt API as 3rd fallback...")
+                    try:
+                        await status_msg.edit_text(
+                            "🟠 جاري التحميل عبر Cobalt..." if lang == "ar"
+                            else "🟠 Downloading via Cobalt..."
+                        )
+                    except:
+                        pass
+                    
+                    try:
+                        cobalt_3rd_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
+                        
+                        if cobalt_3rd_result and cobalt_3rd_result.get("filepath"):
+                            logger.info(f"🟠 Cobalt (3rd fallback) succeeded! File: {cobalt_3rd_result['filepath']}")
+                            
+                            cb_file_path = cobalt_3rd_result.get("file_path", cobalt_3rd_result["filepath"])
+                            cb_file_size = cobalt_3rd_result.get("size", os.path.getsize(cb_file_path))
+                            cb_title = cobalt_3rd_result.get("title", "YouTube Video")
+                            cb_height = cobalt_3rd_result.get("height", 720)
+                            
+                            cb_size_mb = cb_file_size / (1024 * 1024)
+                            cb_size_str = f"{cb_size_mb:.1f}MB"
+                            
+                            # 🛡️ Safety check on Cobalt downloaded media
+                            try:
+                                cb_file_type = "audio" if quality == "audio" else "video"
+                                is_safe_cb, block_msg_cb, _reason_cb = await comprehensive_media_safety_check(
+                                    title=cb_title, file_path=cb_file_path, file_type=cb_file_type,
+                                    platform="telegram", user_id=str(user_id), lang=lang,
+                                )
+                                if not is_safe_cb:
+                                    await message.reply_text(block_msg_cb, parse_mode="HTML")
+                                    try: os.remove(cb_file_path)
+                                    except: pass
+                                    return
+                            except Exception:
+                                pass  # Fail-open
+                            
+                            increment_usage(user_id, "youtube_summaries")
+                            try: track_event("media_downloads")
+                            except: pass
+                            
+                            await status_msg.delete()
+                            
+                            if quality == "audio":
+                                try:
+                                    with open(cb_file_path, 'rb') as f:
+                                        caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {cb_title[:200]}\n📁 {cb_size_str} | Cobalt"
+                                        await message.reply_audio(
+                                            audio=f, filename=f"{cb_title[:50]}.mp3",
+                                            caption=caption,
+                                            parse_mode="HTML",
+                                        )
+                                except Exception as send_err:
+                                    logger.warning(f"⚠️ Cobalt audio send failed: {send_err}")
+                                    # 🔴 لو الإرسال فشل — نجرب Supabase
+                                    if cb_file_size > TELEGRAM_MAX_FREE:
+                                        try:
+                                            from supabase_storage import upload_and_get_link
+                                            cloud_msg = await upload_and_get_link(
+                                                file_path=cb_file_path, filename=f"{cb_title[:50]}.mp3",
+                                                content_type="audio/mpeg", platform="telegram",
+                                                title=cb_title, lang=lang,
+                                            )
+                                            if cloud_msg:
+                                                await message.reply_text(cloud_msg, parse_mode="HTML")
+                                        except:
+                                            pass
+                                    if lang == "ar":
+                                        await message.reply_text(f"❌ فشل إرسال الصوت ({cb_size_str}). جرب تاني!")
+                                    else:
+                                        await message.reply_text(f"❌ Failed to send audio ({cb_size_str}). Try again!")
+                            else:
+                                try:
+                                    with open(cb_file_path, 'rb') as f:
+                                        tech_info = f"{cb_height}p | {cb_size_str} | Cobalt"
+                                        caption = f"📥 {'تم تحميل الفيديو!' if lang == 'ar' else 'Video downloaded!'}\n🎬 {cb_title[:200]}\n📊 {tech_info}"
+                                        await message.reply_video(
+                                            video=f, filename=f"{cb_title[:50]}.mp4",
+                                            caption=caption,
+                                            parse_mode="HTML",
+                                            supports_streaming=True,
+                                        )
+                                except Exception as send_err:
+                                    logger.warning(f"⚠️ Cobalt video send failed (likely too large): {send_err}")
+                                    # 🔴 لو الإرسال فشل — نجرب Supabase
+                                    try:
+                                        from supabase_storage import upload_and_get_link
+                                        cloud_msg = await upload_and_get_link(
+                                            file_path=cb_file_path, filename=f"{cb_title[:50]}.mp4",
+                                            content_type="video/mp4", platform="telegram",
+                                            title=cb_title, lang=lang,
+                                        )
+                                        if cloud_msg:
+                                            await message.reply_text(cloud_msg, parse_mode="HTML", disable_web_page_preview=False)
+                                    except:
+                                        pass
+                                    if lang == "ar":
+                                        await message.reply_text(f"❌ فشل إرسال الفيديو ({cb_size_str}). جرب تاني!")
+                                    else:
+                                        await message.reply_text(f"❌ Failed to send video ({cb_size_str}). Try again!")
+                            
+                            try: os.remove(cb_file_path)
+                            except: pass
+                            return  # ✅ Cobalt (3rd fallback) نجح!
+                        
+                        logger.warning(f"⚠️ Cobalt (3rd fallback) also failed, trying yt-dlp without cookies...")
+                    except Exception as cobalt_3rd_err:
+                        logger.warning(f"⚠️ Cobalt (3rd fallback) error: {cobalt_3rd_err}, trying yt-dlp without cookies...")
+                
+                # ═══ المحاولة 4: كل الطرق فشلت — نجرب بدون كوكيز ═══
+                if info is None:
+                    logger.info("🔄 All methods failed (including Cobalt), trying WITHOUT cookies...")
                     
                     try:
                         await status_msg.edit_text(
@@ -2051,99 +2165,6 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                         except Exception as ac_error:
                             last_error = ac_error
                             logger.warning(f"⚠️ Android clean attempt also failed: {ac_error}")
-        
-        # ═══ المحاولة 4: Cobalt Public API (fallback لو yt-dlp فشل كله) ═══
-        if info is None and is_youtube:
-            logger.info("🟠 All yt-dlp methods failed, trying Cobalt Public API...")
-            try:
-                await status_msg.edit_text(
-                    "🟠 جاري التحميل عبر Cobalt..." if lang == "ar"
-                    else "🟠 Downloading via Cobalt..."
-                )
-            except:
-                pass
-            
-            try:
-                cobalt_public_result = await _try_cobalt_for_youtube(url, quality, tmpdir)
-                
-                if cobalt_public_result and cobalt_public_result.get("filepath"):
-                    logger.info(f"🟠 Cobalt Public succeeded! File: {cobalt_public_result['filepath']}")
-                    
-                    file_path = cobalt_public_result["file_path"] if "file_path" in cobalt_public_result else cobalt_public_result["filepath"]
-                    file_size = cobalt_public_result.get("size", os.path.getsize(file_path))
-                    video_title = cobalt_public_result.get("title", "YouTube Video")
-                    video_height = cobalt_public_result.get("height", 720)
-                    
-                    size_mb = file_size / (1024 * 1024)
-                    size_str = f"{size_mb:.1f}MB"
-                    
-                    # 🛡️ Safety check on Cobalt downloaded media
-                    try:
-                        cb_file_type = "audio" if quality == "audio" else "video"
-                        is_safe_cb, block_msg_cb, _reason_cb = await comprehensive_media_safety_check(
-                            title=video_title, file_path=file_path, file_type=cb_file_type,
-                            platform="telegram", user_id=str(user_id), lang=lang,
-                        )
-                        if not is_safe_cb:
-                            await message.reply_text(block_msg_cb, parse_mode="HTML")
-                            try: os.remove(file_path)
-                            except: pass
-                            return
-                    except Exception:
-                        pass  # Fail-open
-                    
-                    increment_usage(user_id, "youtube_summaries")
-                    try: track_event("media_downloads")
-                    except: pass
-                    
-                    await status_msg.delete()
-                    
-                    if quality == "audio":
-                        try:
-                            with open(file_path, 'rb') as f:
-                                caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {video_title[:200]}\n📁 {size_str} | Cobalt"
-                                await message.reply_audio(
-                                    audio=f, filename=f"{video_title[:50]}.mp3",
-                                    caption=caption,
-                                    parse_mode="HTML",
-                                )
-                        except Exception as send_err:
-                            logger.warning(f"⚠️ Cobalt audio send failed: {send_err}")
-                            await message.reply_text(
-                                f"❌ فشل إرسال الصوت ({size_str}). جرب تاني!" if lang == "ar"
-                                else f"❌ Failed to send audio ({size_str}). Try again!"
-                            )
-                    else:
-                        try:
-                            with open(file_path, 'rb') as f:
-                                tech_info = f"{video_height}p | {size_str} | Cobalt"
-                                caption = f"📥 {'تم تحميل الفيديو!' if lang == 'ar' else 'Video downloaded!'}\n🎬 {video_title[:200]}\n📊 {tech_info}"
-                                await message.reply_video(
-                                    video=f, filename=f"{video_title[:50]}.mp4",
-                                    caption=caption,
-                                    parse_mode="HTML",
-                                    supports_streaming=True,
-                                )
-                        except Exception as send_err:
-                            logger.warning(f"⚠️ Cobalt video send failed (likely too large): {send_err}")
-                            if quality != "low" and quality != "audio":
-                                if lang == "ar":
-                                    await message.reply_text(f"⚠️ الملف كبير ({size_str}). جرب جودة أقل!")
-                                else:
-                                    await message.reply_text(f"⚠️ File too large ({size_str}). Try a lower quality!")
-                            else:
-                                await message.reply_text(
-                                    f"❌ فشل إرسال الفيديو ({size_str}). جرب تاني!" if lang == "ar"
-                                    else f"❌ Failed to send video ({size_str}). Try again!"
-                                )
-                    
-                    try: os.remove(file_path)
-                    except: pass
-                    return  # ✅ Cobalt Public نجح!
-                
-                logger.warning(f"⚠️ Cobalt Public also failed, trying Invidious...")
-            except Exception as cp_err:
-                logger.warning(f"⚠️ Cobalt Public error: {cp_err}, trying Invidious...")
         
         # ═══ المحاولة 5: Invidious API (fallback) ═══
         if info is None and is_youtube:

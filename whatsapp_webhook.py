@@ -1246,12 +1246,14 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                      quality: str = "best", force_audio: bool = False):
     """Download a video and send it via WhatsApp — with yt-dlp FIRST then fallbacks
     
-    🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+    🔴 FIX v9: Cobalt API كـ fallback تالت (بعد player_client وقبل Piped)
     1. yt-dlp + deno + remote_components (الأفضل)
     2. yt-dlp player_client fallback (android → ios → mweb → tv → web)
-    3. Piped API (fallback — زي Invidious بس سيرفرات مختلفة)
-    4. Invidious API (fallback)
-    5. Cloudflare Worker proxy (آخر محاولة)
+    3. 🟠 Cobalt API (fallback تالت — أسرع وأضمن من Piped)
+    4. Piped API (fallback)
+    5. Invidious API (fallback)
+    6. Cobalt JWT (fallback)
+    7. Cloudflare Worker proxy (آخر محاولة)
     
     WhatsApp has a 100MB media size limit. For larger files, we send the download link instead.
     
@@ -1350,7 +1352,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 logger.warning("🧵 Threads WA custom method failed, trying yt-dlp...")
         
         # ═══════════════════════════════════════════════════════════════
-        # 🔴 FIX v8: yt-dlp هو الأولوية الأولى!
+        # 🔴 FIX v9: Cobalt API كـ fallback تالت!
         # نفس ترتيب التليجرام بالظبط
         # ═══════════════════════════════════════════════════════════════
         
@@ -1559,7 +1561,128 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             except Exception:
                                 pass
             
-            # ═══ المرحلة 3: Piped API Fallback (لليوتيوب بس) ═══
+            # ═══ المرحلة 3: Cobalt API Fallback (fallback تالت — أسرع وأضمن من Piped) ═══
+            # 🔴 نفس fallback chain زي التليجرام بالظبط
+            # Cobalt Public API + Self-Hosted
+            if info is None and is_youtube:
+                try:
+                    from handlers.download_handlers import _try_cobalt_for_youtube
+                    
+                    logger.info(f"🟠 WhatsApp Cobalt: Attempting download as 3rd fallback for {url[:80]}")
+                    
+                    try:
+                        await _send_whatsapp_message(wa_id, "🟠 جاري التحميل عبر Cobalt...")
+                    except:
+                        pass
+                    
+                    cobalt_result = await asyncio.wait_for(
+                        _try_cobalt_for_youtube(url, quality, tmpdir),
+                        timeout=90
+                    )
+                    
+                    if cobalt_result and cobalt_result.get("filepath"):
+                        logger.info(f"🟠 WhatsApp Cobalt (3rd fallback) succeeded! File: {cobalt_result['filepath']}")
+                        
+                        cobalt_file = cobalt_result["filepath"] if "filepath" in cobalt_result else cobalt_result.get("file_path")
+                        cobalt_size = cobalt_result.get("size", os.path.getsize(cobalt_file) if os.path.exists(cobalt_file) else 0)
+                        cobalt_title = cobalt_result.get("title", "YouTube Video")
+                        cobalt_height = cobalt_result.get("height", 720)
+                        cobalt_size_mb = cobalt_size / (1024 * 1024)
+                        size_str = f"{cobalt_size_mb:.1f}MB"
+                        
+                        if cobalt_file and os.path.exists(cobalt_file):
+                            # 🛡️ Safety check
+                            try:
+                                from content_safety import comprehensive_media_safety_check
+                                cb_file_type = "audio" if is_audio_only else "video"
+                                is_safe_cb, block_msg_cb, _ = await comprehensive_media_safety_check(
+                                    title=cobalt_title, file_path=cobalt_file, file_type=cb_file_type,
+                                    platform="whatsapp", user_id=str(wa_user_id), lang="ar",
+                                )
+                                if not is_safe_cb:
+                                    await _send_whatsapp_message(wa_id, block_msg_cb)
+                                    try: os.remove(cobalt_file)
+                                    except: pass
+                                    await feedback.error()
+                                    return
+                            except Exception:
+                                pass  # Fail-open
+                            
+                            if is_audio_only or quality == "audio":
+                                try:
+                                    with open(cobalt_file, 'rb') as af:
+                                        media_response = requests.post(
+                                            f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
+                                            headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                                            files={"file": (f"{cobalt_title[:50]}.mp3", af, "audio/mpeg")},
+                                            data={"messaging_product": "whatsapp", "type": "audio"},
+                                            timeout=120
+                                        )
+                                        if media_response.status_code == 200:
+                                            media_id = media_response.json().get("id")
+                                            await _send_whatsapp_audio(wa_id, media_id)
+                                            await feedback.success()
+                                            try: os.remove(cobalt_file)
+                                            except: pass
+                                            return
+                                except Exception as audio_send_err:
+                                    logger.warning(f"⚠️ Cobalt audio send failed: {audio_send_err}")
+                            else:
+                                # 🔴 استخدام Supabase للملفات الكبيرة
+                                if cobalt_size_mb > 100:
+                                    try:
+                                        from supabase_storage import upload_and_get_link
+                                        cloud_msg = await upload_and_get_link(
+                                            file_path=cobalt_file,
+                                            filename=f"{cobalt_title[:50]}.mp4",
+                                            content_type="video/mp4",
+                                            platform="whatsapp",
+                                            title=cobalt_title,
+                                            lang="ar",
+                                        )
+                                        if cloud_msg:
+                                            await _send_whatsapp_message(wa_id, cloud_msg)
+                                            await feedback.success()
+                                            try: os.remove(cobalt_file)
+                                            except: pass
+                                            return
+                                    except Exception as sup_err:
+                                        logger.error(f"☁️ Supabase upload error: {sup_err}")
+                                    await _send_whatsapp_message(wa_id, f"❌ فشل إرسال الفيديو من Cobalt ({size_str}). جرب تاني!")
+                                    await feedback.success()
+                                    try: os.remove(cobalt_file)
+                                    except: pass
+                                    return
+                                
+                                try:
+                                    with open(cobalt_file, 'rb') as vf:
+                                        media_response = requests.post(
+                                            f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
+                                            headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                                            files={"file": (f"{cobalt_title[:50]}.mp4", vf, "video/mp4")},
+                                            data={"messaging_product": "whatsapp", "type": "video"},
+                                            timeout=180
+                                        )
+                                        if media_response.status_code == 200:
+                                            media_id = media_response.json().get("id")
+                                            tech_info = f"{cobalt_height}p | {size_str} | Cobalt"
+                                            await _send_whatsapp_video(wa_id, media_id, caption=f"🎬 {cobalt_title[:200]}\n📥 {tech_info}")
+                                            await feedback.success()
+                                            try: os.remove(cobalt_file)
+                                            except: pass
+                                            return
+                                except Exception as video_send_err:
+                                    logger.warning(f"⚠️ Cobalt video send failed: {video_send_err}")
+                    
+                    logger.warning(f"⚠️ Cobalt (3rd fallback) failed, trying Piped...")
+                except ImportError:
+                    logger.warning("⚠️ Cobalt download handler not available, trying Piped...")
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Cobalt timed out, trying Piped...")
+                except Exception as cobalt_err:
+                    logger.warning(f"⚠️ Cobalt error: {cobalt_err}, trying Piped...")
+            
+            # ═══ المرحلة 4: Piped API Fallback (لليوتيوب بس) ═══
             # Piped = واجهة بديلة لليوتيوب مفتوحة المصدر — مختلفة عن Invidious
             # بيستخدم NewPipe Extractor — أحياناً بيشتغل لما Invidious يبقى منطفي
             if info is None and is_youtube:
@@ -1669,7 +1792,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 except Exception as piped_err:
                     logger.warning(f"⚠️ Piped error: {piped_err}, trying Invidious...")
             
-            # ═══ المرحلة 3.5: Invidious API Fallback (لليوتيوب بس) ═══
+            # ═══ المرحلة 5: Invidious API Fallback (لليوتيوب بس) ═══
             # Invidious = واجهة بديلة لليوتيوب مفتوحة المصدر
             if info is None and is_youtube:
                 try:
@@ -1769,96 +1892,11 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 except ImportError:
                     logger.warning("⚠️ invidious_api module not available, skipping Invidious")
                 except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Invidious timed out, trying Cobalt...")
+                    logger.warning(f"⚠️ Invidious timed out, trying Cobalt JWT...")
                 except Exception as inv_err:
-                    logger.warning(f"⚠️ Invidious error: {inv_err}, trying Cobalt...")
+                    logger.warning(f"⚠️ Invidious error: {inv_err}, trying Cobalt JWT...")
             
-            # ═══ المرحلة 4: Cobalt API Fallback (لليوتيوب بس) ═══
-            # 🔴 نفس fallback chain زي التليجرام بالظبط
-            # Cobalt Public API + Self-Hosted + JWT
-            if info is None and is_youtube:
-                try:
-                    from handlers.download_handlers import _try_cobalt_for_youtube
-                    
-                    logger.info(f"🟠 WhatsApp Cobalt: Attempting download for {url[:80]}")
-                    
-                    try:
-                        await _send_whatsapp_message(wa_id, "🟠 جاري التحميل عبر Cobalt...")
-                    except:
-                        pass
-                    
-                    cobalt_result = await asyncio.wait_for(
-                        _try_cobalt_for_youtube(url, quality, tmpdir),
-                        timeout=90
-                    )
-                    
-                    if cobalt_result and cobalt_result.get("filepath"):
-                        logger.info(f"🟠 WhatsApp Cobalt succeeded! File: {cobalt_result['filepath']}")
-                        
-                        cobalt_file = cobalt_result["filepath"] if "filepath" in cobalt_result else cobalt_result.get("file_path")
-                        cobalt_size = cobalt_result.get("size", os.path.getsize(cobalt_file) if os.path.exists(cobalt_file) else 0)
-                        cobalt_title = cobalt_result.get("title", "YouTube Video")
-                        cobalt_height = cobalt_result.get("height", 720)
-                        cobalt_size_mb = cobalt_size / (1024 * 1024)
-                        size_str = f"{cobalt_size_mb:.1f}MB"
-                        
-                        if cobalt_file and os.path.exists(cobalt_file):
-                            if is_audio_only or quality == "audio":
-                                try:
-                                    with open(cobalt_file, 'rb') as af:
-                                        media_response = requests.post(
-                                            f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
-                                            headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
-                                            files={"file": (f"{cobalt_title[:50]}.mp3", af, "audio/mpeg")},
-                                            data={"messaging_product": "whatsapp", "type": "audio"},
-                                            timeout=120
-                                        )
-                                        if media_response.status_code == 200:
-                                            media_id = media_response.json().get("id")
-                                            await _send_whatsapp_audio(wa_id, media_id)
-                                            await feedback.success()
-                                            try: os.remove(cobalt_file)
-                                            except: pass
-                                            return
-                                except Exception as audio_send_err:
-                                    logger.warning(f"⚠️ Cobalt audio send failed: {audio_send_err}")
-                            else:
-                                if cobalt_size_mb <= 100:
-                                    try:
-                                        with open(cobalt_file, 'rb') as vf:
-                                            media_response = requests.post(
-                                                f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
-                                                headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
-                                                files={"file": (f"{cobalt_title[:50]}.mp4", vf, "video/mp4")},
-                                                data={"messaging_product": "whatsapp", "type": "video"},
-                                                timeout=180
-                                            )
-                                            if media_response.status_code == 200:
-                                                media_id = media_response.json().get("id")
-                                                tech_info = f"{cobalt_height}p | {size_str} | Cobalt"
-                                                await _send_whatsapp_video(wa_id, media_id, caption=f"🎬 {cobalt_title[:200]}\n📥 {tech_info}")
-                                                await feedback.success()
-                                                try: os.remove(cobalt_file)
-                                                except: pass
-                                                return
-                                    except Exception as video_send_err:
-                                        logger.warning(f"⚠️ Cobalt video send failed: {video_send_err}")
-                                else:
-                                    await _send_whatsapp_message(wa_id, f"❌ فشل إرسال الفيديو من Cobalt. جرب تاني!")
-                                    await feedback.success()
-                                    try: os.remove(cobalt_file)
-                                    except: pass
-                                    return
-                    
-                    logger.warning(f"⚠️ Cobalt failed, trying Cobalt JWT...")
-                except ImportError:
-                    logger.warning("⚠️ Cobalt download handler not available, skipping Cobalt")
-                except asyncio.TimeoutError:
-                    logger.warning(f"⚠️ Cobalt timed out, trying Cobalt JWT...")
-                except Exception as cobalt_err:
-                    logger.warning(f"⚠️ Cobalt error: {cobalt_err}, trying Cobalt JWT...")
-            
-            # ═══ المرحلة 5: Cobalt JWT — آخر fallback قبل Cloudflare Worker ═══
+            # ═══ المرحلة 6: Cobalt JWT — آخر fallback قبل Cloudflare Worker ═══
             # 🔴 ده JWT شخصي من cobalt.tools — بنستخدمه كـ آخر حل لو كل حاجة فشلت
             if info is None and is_youtube:
                 try:
@@ -1969,7 +2007,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 except Exception as jwt_err:
                     logger.warning(f"⚠️ Cobalt JWT error: {jwt_err}")
             
-            # ═══ المرحلة 6: Cloudflare Worker Proxy Fallback (آخر محاولة) ═══
+            # ═══ المرحلة 7: Cloudflare Worker Proxy Fallback (آخر محاولة) ═══
             # لو yt-dlp فشل على Railway (IPs محجوبة)، نجرب عبر Cloudflare Worker
             if info is None:
                 from config import CLOUDFLARE_WORKER_URL
