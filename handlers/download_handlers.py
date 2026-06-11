@@ -892,31 +892,91 @@ def _retrieve_url(key: str) -> str:
 # كيبورد اختيار الجودة
 # ═══════════════════════════════════════
 
-def _get_quality_keyboard(url: str, lang: str = "ar") -> InlineKeyboardMarkup:
-    """أزرار اختيار جودة الفيديو"""
+def _get_quality_keyboard(url: str, lang: str = "ar", mode: str = "all") -> InlineKeyboardMarkup:
+    """أزرار اختيار جودة الفيديو/الصوت
+    
+    🔴 mode:
+    - "video": جودات الفيديو بس (لما المستخدم يبحث بـ /video)
+    - "audio": جودات الصوت بس (لما المستخدم يبحث بـ /audio)
+    - "all": كل الخيارات فيديو + صوت (لما المستخدم يبعت رابط مباشر بـ /download)
+    """
     url_key = _store_url(url)
-    if lang == "ar":
-        keyboard = [
-            [
-                InlineKeyboardButton("🎬 أعلى جودة", callback_data=f"dl_v_b_{url_key}"),
-                InlineKeyboardButton("📹 جودة متوسطة", callback_data=f"dl_v_m_{url_key}"),
-            ],
-            [
-                InlineKeyboardButton("📱 جودة منخفضة", callback_data=f"dl_v_l_{url_key}"),
-                InlineKeyboardButton("🎵 صوت بس MP3", callback_data=f"dl_a_{url_key}"),
-            ],
-        ]
+    
+    if mode == "video":
+        # 🔴 فيديو بس — بدون زر صوت
+        if lang == "ar":
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎬 أعلى جودة", callback_data=f"dl_v_b_{url_key}"),
+                    InlineKeyboardButton("📹 جودة متوسطة", callback_data=f"dl_v_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("📱 جودة منخفضة", callback_data=f"dl_v_l_{url_key}"),
+                ],
+            ]
+        else:
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎬 Best Quality", callback_data=f"dl_v_b_{url_key}"),
+                    InlineKeyboardButton("📹 Medium Quality", callback_data=f"dl_v_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("📱 Low Quality", callback_data=f"dl_v_l_{url_key}"),
+                ],
+            ]
+    
+    elif mode == "audio":
+        # 🔴 صوت بس — جودات صوت مختلفة
+        if lang == "ar":
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎵 صوت عالي الجودة MP3", callback_data=f"dl_a_h_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("🎵 صوت متوسط الجودة MP3", callback_data=f"dl_a_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("🎵 صوت منخفض الجودة MP3", callback_data=f"dl_a_l_{url_key}"),
+                ],
+            ]
+        else:
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎵 High Quality MP3", callback_data=f"dl_a_h_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("🎵 Medium Quality MP3", callback_data=f"dl_a_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("🎵 Low Quality MP3", callback_data=f"dl_a_l_{url_key}"),
+                ],
+            ]
+    
     else:
-        keyboard = [
-            [
-                InlineKeyboardButton("🎬 Best Quality", callback_data=f"dl_v_b_{url_key}"),
-                InlineKeyboardButton("📹 Medium Quality", callback_data=f"dl_v_m_{url_key}"),
-            ],
-            [
-                InlineKeyboardButton("📱 Low Quality", callback_data=f"dl_v_l_{url_key}"),
-                InlineKeyboardButton("🎵 Audio Only MP3", callback_data=f"dl_a_{url_key}"),
-            ],
-        ]
+        # 🔴 كل الخيارات — فيديو + صوت (للرابط المباشر /download)
+        if lang == "ar":
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎬 أعلى جودة", callback_data=f"dl_v_b_{url_key}"),
+                    InlineKeyboardButton("📹 جودة متوسطة", callback_data=f"dl_v_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("📱 جودة منخفضة", callback_data=f"dl_v_l_{url_key}"),
+                    InlineKeyboardButton("🎵 صوت بس MP3", callback_data=f"dl_a_{url_key}"),
+                ],
+            ]
+        else:
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎬 Best Quality", callback_data=f"dl_v_b_{url_key}"),
+                    InlineKeyboardButton("📹 Medium Quality", callback_data=f"dl_v_m_{url_key}"),
+                ],
+                [
+                    InlineKeyboardButton("📱 Low Quality", callback_data=f"dl_v_l_{url_key}"),
+                    InlineKeyboardButton("🎵 Audio Only MP3", callback_data=f"dl_a_{url_key}"),
+                ],
+            ]
+    
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -1613,6 +1673,14 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
     
     # 🔴 FIX v4: إعدادات حسب نوع المحتوى
     if quality == "audio":
+        # 🔴 FIX: استخدام _audio_quality_variant لتحديد جودة الصوت
+        # audio = 320kbps (افتراضي), audio_medium = 192kbps, audio_low = 128kbps
+        _audio_bitrate = "320"  # افتراضي: أعلى جودة
+        if _audio_quality_variant == "audio_medium":
+            _audio_bitrate = "192"
+        elif _audio_quality_variant == "audio_low":
+            _audio_bitrate = "128"
+        
         if ffmpeg_ok:
             opts = {
                 **common_opts,
@@ -1620,7 +1688,7 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredquality': _audio_bitrate,
                 }],
             }
         else:
@@ -1752,6 +1820,15 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
     7. Cobalt Self-Hosted (fallback)
     8. Cloudflare Worker (آخر محاولة)
     """
+    # 🔴 FIX: توحيد جودات الصوت — audio_medium و audio_low يتعاملوا زي audio
+    # الفرق في الجودة بيتحكم فيه yt-dlp من خلال الـ format option
+    if quality in ("audio_medium", "audio_low"):
+        # نحفظ الجودة الأصلية عشان نستخدمها في اختيار الـ bitrate
+        _audio_quality_variant = quality
+        quality = "audio"
+    else:
+        _audio_quality_variant = None
+    
     # تحديد الرسالة
     if hasattr(update_or_query, 'message'):
         message = update_or_query.message
@@ -2843,8 +2920,20 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
         quality = quality_map.get(parts[2], "best")
         url_key = parts[3]
     elif dl_type == "a":
-        quality = "audio"
-        url_key = parts[2]
+        # 🔴 FIX: دعم جودات الصوت المختلفة
+        # dl_a_{key} = صوت عادي (للرابط المباشر /download)
+        # dl_a_h_{key} = صوت عالي الجودة (للبحث /audio)
+        # dl_a_m_{key} = صوت متوسط الجودة
+        # dl_a_l_{key} = صوت منخفض الجودة
+        if len(parts) >= 4 and parts[2] in ("h", "m", "l"):
+            # جودة صوت محددة من /audio search
+            audio_quality_map = {"h": "audio", "m": "audio_medium", "l": "audio_low"}
+            quality = audio_quality_map.get(parts[2], "audio")
+            url_key = parts[3]
+        else:
+            # صوت عادي من /download
+            quality = "audio"
+            url_key = parts[2]
     else:
         return
     

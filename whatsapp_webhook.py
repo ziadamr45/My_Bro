@@ -1195,14 +1195,23 @@ async def _show_quality_selection_for_search(wa_id: str, url: str, title: str,
     display_title = title[:50] if title else "فيديو"
     body = f"📥 *اختار الجودة*\n\n📺 {display_title}\n🔗 المنصة: {platform_display}"
     
-    # 🔴 لو البحث كان صوت → نحط خيار الصوت كأول اختيار في القائمة
+    # 🔴 FIX: عرض الجودات حسب نوع البحث
+    # - /video → جودات فيديو بس (من غير صوت)
+    # - /audio → جودات صوت بس (من غير فيديو)
+    # - /download (رابط مباشر) → كل الخيارات (فيديو + صوت)
     if search_type == "audio":
+        # 🔴 صوت بس — بدون خيارات فيديو
         sections = [{
-            "title": "🎵 صوت فقط",
+            "title": "🎵 جودات الصوت",
             "rows": [
-                {"id": f"dl_a_{url_key}", "title": "🎵 صوت بس MP3", "description": "استخراج الصوت فقط - الأسرع"},
+                {"id": f"dl_a_h_{url_key}", "title": "🎵 صوت عالي الجودة", "description": "أفضل جودة صوت MP3"},
+                {"id": f"dl_a_m_{url_key}", "title": "🎵 صوت متوسط الجودة", "description": "توازن بين الجودة والحجم"},
+                {"id": f"dl_a_l_{url_key}", "title": "🎵 صوت منخفض الجودة", "description": "حجم صغير - الأسرع"},
             ],
-        }, {
+        }]
+    elif search_type == "video":
+        # 🔴 فيديو بس — بدون خيارات صوت
+        sections = [{
             "title": "🎬 جودة الفيديو",
             "rows": [
                 {"id": f"dl_v_b_{url_key}", "title": "🎬 أعلى جودة", "description": "1080p - أفضل جودة متاحة"},
@@ -1211,6 +1220,7 @@ async def _show_quality_selection_for_search(wa_id: str, url: str, title: str,
             ],
         }]
     else:
+        # 🔴 رابط مباشر (/download) — كل الخيارات
         sections = [{
             "title": "🎬 جودة الفيديو",
             "rows": [
@@ -4218,7 +4228,10 @@ async def _handle_incoming_message(message: dict, value: dict):
                     "dl_v_b_": "best",
                     "dl_v_m_": "medium",
                     "dl_v_l_": "low",
-                    "dl_a_": "audio",
+                    "dl_a_h_": "audio",         # 🔴 FIX: جودات صوت مختلفة (من /audio search)
+                    "dl_a_m_": "audio_medium",
+                    "dl_a_l_": "audio_low",
+                    "dl_a_": "audio",            # صوت عادي (من /download رابط مباشر)
                 }
                 for prefix, q in quality_map.items():
                     if interactive_id.startswith(prefix):

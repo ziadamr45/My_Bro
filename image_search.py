@@ -3,16 +3,22 @@ Image Search Module 🔍🖼️
 بحث عن صور وتحميلها
 
 🔴 كيف بيشتغل:
-1. بيستخدم DuckDuckGo Images API كبحث أساسي (مجاني وموثوق)
-2. Fallback لـ Unsplash / Pexels / Pixabay لو متاحين
-3. بيرجع قائمة صور فيها: رابط، صورة مصغرة، حجم، مصدر
+1. بيبحث في Pexels + Pixabay + Unsplash في نفس الوقت (parallel)
+2. بيدمج النتائج وبيخلطها عشان التنوع
+3. بيرجع قائمة صور فيها: رابط، صورة مصغرة، حجم، مصدر، مصور
 4. بيقدر يحمّل الصور ويبعتها
 
 🔴 الميزات:
 - بحث صور بالكلمات المفتاحية
 - تحديد عدد الصور المطلوبة (1-15)
 - تحميل الصور وإرسالها مباشرة
-- Fallback بين محركات بحث متعددة
+- Parallel search = أسرع = نتائج أكتر
+- مصادر احترافية (Pexels · Pixabay · Unsplash)
+
+🔴 محتاج API keys:
+- PEXELS_API_KEY — من pexels.com/api (مجاني)
+- PIXABAY_API_KEY — من pixabay.com/api/docs (مجاني)
+- UNSPLASH_ACCESS_KEY — من unsplash.com/developers (مجاني)
 """
 
 import logging
@@ -40,7 +46,9 @@ _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHT
 
 
 # ═══════════════════════════════════════
-# DuckDuckGo Image Search (الأساسي — مجاني وموثوق)
+# DuckDuckGo Image Search — 🔴 تم الاستغناء عنه!
+# DuckDuckGo بيرجع صورة واحدة مش مرتبطة بالمطلوب
+# بدله بنستخدم Pexels + Pixabay + Unsplash (بحث متوازي)
 # ═══════════════════════════════════════
 
 async def search_images_duckduckgo(query: str, count: int = 3) -> Optional[List[Dict]]:
@@ -101,7 +109,7 @@ async def search_images_duckduckgo(query: str, count: int = 3) -> Optional[List[
 
 
 # ═══════════════════════════════════════
-# Unsplash API (Fallback — محتاج API key)
+# Unsplash API (أساسي — صور احترافية)
 # ═══════════════════════════════════════
 
 async def search_images_unsplash(query: str, count: int = 3) -> Optional[List[Dict]]:
@@ -158,7 +166,7 @@ async def search_images_unsplash(query: str, count: int = 3) -> Optional[List[Di
 
 
 # ═══════════════════════════════════════
-# Pexels API (Fallback — محتاج API key)
+# Pexels API (أساسي — صور عالية الجودة)
 # ═══════════════════════════════════════
 
 async def search_images_pexels(query: str, count: int = 3) -> Optional[List[Dict]]:
@@ -214,7 +222,7 @@ async def search_images_pexels(query: str, count: int = 3) -> Optional[List[Dict
 
 
 # ═══════════════════════════════════════
-# Pixabay API (Fallback — محتاج API key)
+# Pixabay API (أساسي — صور مجانية كتير)
 # ═══════════════════════════════════════
 
 async def search_images_pixabay(query: str, count: int = 3) -> Optional[List[Dict]]:
@@ -272,17 +280,22 @@ async def search_images_pixabay(query: str, count: int = 3) -> Optional[List[Dic
 
 
 # ═══════════════════════════════════════
-# بحث صور — Fallback chain
+# بحث صور — Parallel Search (Pexels + Pixabay + Unsplash)
 # ═══════════════════════════════════════
 
 async def search_images(query: str, count: int = 3) -> Optional[List[Dict]]:
-    """بحث صور — Fallback chain بين محركات بحث متعددة
+    """بحث صور — Parallel search من Pexels + Pixabay + Unsplash
     
-    🔴 الأولوية:
-    1. DuckDuckGo Images (مجاني — لا يحتاج API key)
-    2. Unsplash API (صور عالية الجودة)
-    3. Pexels API (صور مجانية)
-    4. Pixabay API (صور مجانية)
+    🔴 FIX: DuckDuckGo اتحل مكانه بحث متوازي من APIs احترافية
+    - Pexels API — صور عالية الجودة، مجاني (محتاج PEXELS_API_KEY)
+    - Pixabay API — صور مجانية كتير، مجاني (محتاج PIXABAY_API_KEY)
+    - Unsplash API — صور احترافية، مجاني (محتاج UNSPLASH_ACCESS_KEY)
+    
+    🔴 الميزات عن DuckDuckGo:
+    1. صور عالية الجودة فعلاً (مش صورة واحدة مش لاقية)
+    2. كل صورة ليها مصدر واضح (Pexels/Pixabay/Unsplash)
+    3. بحث متوازي = أسرع
+    4. كل APIs ليها روابط تحميل مباشرة
     
     Args:
         query: كلمة البحث
@@ -293,25 +306,55 @@ async def search_images(query: str, count: int = 3) -> Optional[List[Dict]]:
     """
     count = max(MIN_IMAGE_COUNT, min(count, MAX_IMAGE_COUNT))
     
-    # Fallback chain — DuckDuckGo الأول لأنه مجاني وموثوق
-    search_methods = [
-        ("DuckDuckGo", search_images_duckduckgo),
-        ("Unsplash", search_images_unsplash),
+    # 🔴 FIX: بنبحث في الـ 3 APIs في نفس الوقت (parallel) بدل fallback chain
+    # كل API بيرجع count نتائج، وبندمجهم وبنختار أفضل count
+    import asyncio
+    
+    search_tasks = [
         ("Pexels", search_images_pexels),
         ("Pixabay", search_images_pixabay),
+        ("Unsplash", search_images_unsplash),
     ]
     
-    for name, method in search_methods:
-        try:
-            results = await method(query, count)
-            if results and len(results) > 0:
-                logger.info(f"🖼️ Image search ({name}): {len(results)} results for '{query}'")
-                return results
-        except Exception as e:
-            logger.warning(f"🖼️ Image search ({name}) error: {e}")
-        logger.debug(f"🖼️ Image search ({name}): no results, trying next...")
+    # بنشغل كل البحث في نفس الوقت
+    tasks = []
+    for name, method in search_tasks:
+        tasks.append(method(query, count))
     
-    logger.warning(f"🖼️ All image search methods failed for '{query}'")
+    results_list = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # بنجمع كل النتائج الناجحة
+    all_results = []
+    for i, result in enumerate(results_list):
+        name = search_tasks[i][0]
+        if isinstance(result, Exception):
+            logger.warning(f"🖼️ Image search ({name}) error: {result}")
+            continue
+        if result and len(result) > 0:
+            logger.info(f"🖼️ Image search ({name}): {len(result)} results for '{query}'")
+            all_results.extend(result)
+        else:
+            logger.debug(f"🖼️ Image search ({name}): no results")
+    
+    if all_results:
+        # 🔴 نخلط النتائج عشان مش تكون كلها من مصدر واحد
+        import random
+        random.shuffle(all_results)
+        
+        # 🔴 نزيل التكرار بناءً على الـ URL
+        seen_urls = set()
+        unique_results = []
+        for r in all_results:
+            url = r.get("url", "") or r.get("thumbnail", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_results.append(r)
+        
+        # 🔴 نرجع العدد المطلوب (أو أكتر شوية عشان لو فشل تحميل بعض الصور)
+        return_count = min(count * 2, len(unique_results))  # بنرجع ضعف العدد عشان نعوض عن فشل التحميل
+        return unique_results[:return_count]
+    
+    logger.warning(f"🖼️ All image search APIs failed for '{query}'")
     return None
 
 

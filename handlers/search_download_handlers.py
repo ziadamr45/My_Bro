@@ -336,7 +336,7 @@ async def _execute_photo_search(query_obj, query_text: str, count: int, lang: st
             await query_obj.edit_message_text(f"🖼️ Searching for {count} images: {query_text}...")
         
         # 🔴 FIX: بنبحث عن عدد أكبر عشان نوفر بدائل لو فشل تحميل بعض الصور
-        # search_images داخلياً بيزود count * 3 في DuckDuckGo
+        # search_images داخلياً بيدمج نتائج Pexels + Pixabay + Unsplash
         results = await search_images(query_text, count=count)
         
         if not results:
@@ -558,7 +558,7 @@ async def handle_search_callback(update: Update, context: ContextTypes.DEFAULT_T
         else:
             msg = f"📥 *Choose download quality*\n\n📺 {title[:100]}"
         
-        keyboard = _get_quality_keyboard(url, lang)
+        keyboard = _get_quality_keyboard(url, lang, mode="video")
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         
     elif action == "sa":
@@ -570,5 +570,5 @@ async def handle_search_callback(update: Update, context: ContextTypes.DEFAULT_T
         else:
             msg = f"🎵 *Choose download quality*\n\n📺 {title[:100]}"
         
-        keyboard = _get_quality_keyboard(url, lang)
+        keyboard = _get_quality_keyboard(url, lang, mode="audio")
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
