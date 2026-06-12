@@ -10,6 +10,9 @@
 import asyncio
 import logging
 import os
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 
 from config import REQUEST_TIMEOUT, DEVELOPER_USER_ID, DEVELOPER_USERNAME
@@ -59,6 +62,45 @@ You are talking to Ziad Amr (@ziadamr) — the person who created you, programme
 🔴 There are NO limits on him — everything is open
 🔴 Be natural with him — act like you're talking to the person who created you with their own hands
 """
+
+
+# ═══════════════════════════════════════
+# كاش نتائج البحث - Search Results Cache
+# ⚡ لو أكتر من شخص يسأل نفس السؤال خلال 5 دقائق، نرد من الكاش فوراً
+# ═══════════════════════════════════════
+
+_search_cache = OrderedDict()
+_MAX_SEARCH_CACHE_SIZE = 50
+_SEARCH_CACHE_TTL = 300  # 5 دقائق
+
+
+def _get_search_cache_key(query: str, language: str) -> str:
+    """مفتاح كاش موحد للبحث"""
+    import hashlib
+    normalized = query.lower().strip()
+    key_str = f"search:{normalized}|{language}"
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def _get_cached_search(query: str, language: str):
+    """البحث عن نتائج بحث مخزنة مؤقتاً"""
+    key = _get_search_cache_key(query, language)
+    entry = _search_cache.get(key)
+    if entry and time.time() - entry["time"] < _SEARCH_CACHE_TTL:
+        logger.info(f"💾 Search cache HIT for: {query[:50]}")
+        return entry["results"]
+    if entry:
+        del _search_cache[key]
+    return None
+
+
+def _set_cached_search(query: str, language: str, results):
+    """تخزين نتائج بحث مؤقتاً"""
+    key = _get_search_cache_key(query, language)
+    _search_cache[key] = {"results": results, "time": time.time()}
+    while len(_search_cache) > _MAX_SEARCH_CACHE_SIZE:
+        _search_cache.popitem(last=False)
+    logger.debug(f"💾 Cached search results for: {query[:50]}")
 
 
 # ═══════════════════════════════════════
@@ -495,7 +537,16 @@ def _search_and_summarize_sync(query: str, language: str = "ar", memory_context:
     from provider_manager import call_ai_sync
 
     logger.info(f"🔍 Starting web search for: {query}")
-    results = _search_web_sync(query, max_results=8, language=language)
+
+    # ⚡ كاش نتائج البحث — لو حد سأل نفس السؤال خلال 5 دقائق
+    cached_search = _get_cached_search(query, language)
+    if cached_search is not None:
+        results = cached_search
+        logger.info(f"💾 Using cached search results ({len(results)} results)")
+    else:
+        results = _search_web_sync(query, max_results=8, language=language)
+        if results:
+            _set_cached_search(query, language, results)
 
     if not results:
         logger.warning(f"⚠️ No search results found for: {query}")
@@ -643,6 +694,12 @@ def _deep_search_and_summarize_sync(query: str, language: str = "ar", memory_con
     from provider_manager import call_ai_sync
     import asyncio
 
+    # ⚡ كاش نتائج البحث العميق — لو حد سأل نفس السؤال خلال 5 دقائق
+    cached_deep = _get_cached_search(f"deep:{query}", language)
+    if cached_deep is not None:
+        logger.info(f"💾 Deep search cache HIT for: {query[:50]}")
+        return cached_deep
+
     # 🔴 FIX v9.13: بنستخدم الـ event loop اللي اتبعت من الـ async function
     # مش بنجيبه من الـ thread لأن asyncio.get_event_loop() مبتشتغلش في
     # الـ executor thread في Python 3.10+ (بتدي RuntimeError)
@@ -659,24 +716,55 @@ def _deep_search_and_summarize_sync(query: str, language: str = "ar", memory_con
 
     logger.info(f"🔬 Starting DEEP search for: {query}")
 
-    # ═══ المرحلة 0: بحث الويب ═══
+    # ═══ المراحل 0-2: بحث الويب + الأخبار + Tavily بالتوازي ═══
+    # ⚡ SPEED FIX: تشغيل 3 عمليات البحث بالتوازي بدل ورا بعض
+    # وفر 4-10 ثواني! كل بحث مستقل عن التاني
     _notify_stage(0)
-    # 🔴 FIX: لو اللغة عربي، نخلي الـ deep search يجيب نتائج اكتر
     search_max = 8 if language == "ar" else 5
-    web_results = _search_web_sync(query, max_results=search_max, language=language)
-    logger.info(f"🔍 Web search: {len(web_results)} results")
+    news_max = 8 if language == "ar" else 5
 
-    # ═══ المرحلة 1: بحث الأخبار ═══
-    _notify_stage(1)
-    news_results = _search_news_sync(query, max_results=8 if language == "ar" else 5)
-    logger.info(f"📰 News search: {len(news_results)} results")
+    def _run_web_search():
+        _notify_stage(0)
+        result = _search_web_sync(query, max_results=search_max, language=language)
+        logger.info(f"🔍 Web search: {len(result)} results")
+        return ("web", result)
 
-    # ═══ المرحلة 2: بحث متقدم (Tavily Advanced) ═══
-    _notify_stage(2)
+    def _run_news_search():
+        _notify_stage(1)
+        result = _search_news_sync(query, max_results=news_max)
+        logger.info(f"📰 News search: {len(result)} results")
+        return ("news", result)
+
+    def _run_tavily_search():
+        _notify_stage(2)
+        if TAVILY_API_KEY:
+            result = _search_tavily_sync(query, max_results=5, search_depth="advanced")
+            logger.info(f"🔬 Tavily advanced: {len(result)} results")
+            return ("tavily", result)
+        logger.info("🔬 Tavily advanced: skipped (no API key)")
+        return ("tavily", [])
+
+    web_results = []
+    news_results = []
     tavily_deep_results = []
-    if TAVILY_API_KEY:
-        tavily_deep_results = _search_tavily_sync(query, max_results=5, search_depth="advanced")
-    logger.info(f"🔬 Tavily advanced: {len(tavily_deep_results)} results")
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_run_web_search): "web",
+            executor.submit(_run_news_search): "news",
+            executor.submit(_run_tavily_search): "tavily",
+        }
+        for future in as_completed(futures):
+            try:
+                search_type, results = future.result(timeout=30)
+                if search_type == "web":
+                    web_results = results
+                elif search_type == "news":
+                    news_results = results
+                elif search_type == "tavily":
+                    tavily_deep_results = results
+            except Exception as e:
+                logger.warning(f"⚠️ Parallel search failed for {futures[future]}: {e}")
 
     all_results_count = len(web_results) + len(news_results) + len(tavily_deep_results)
     logger.info(f"🔬 Deep search found {all_results_count} total results")
@@ -717,7 +805,11 @@ Question: {query}
         from formatters import clean_ai_response
         if response:
             response = clean_ai_response(response)
-        return response or ("لم أتمكن من العثور على معلومات كافية. 🤖" if language == "ar" else "I couldn't find enough information. 🤖")
+        # ⚡ كاش نتائج البحث
+        final = response or ("لم أتمكن من العثور على معلومات كافية. 🤖" if language == "ar" else "I couldn't find enough information. 🤖")
+        if final and response:
+            _set_cached_search(f"deep:{query}", language, final)
+        return final
 
     # ═══ المرحلة 3: فهرسة وتحليل النتائج ═══
     _notify_stage(3)
@@ -842,7 +934,11 @@ Do NOT fabricate information - if unsure, say so honestly."""
     from formatters import clean_ai_response
     if response:
         response = clean_ai_response(response)
-    return response or ("لم أتمكن من معالجة نتائج البحث العميق. 🤖" if language == "ar" else "I couldn't process deep search results. 🤖")
+    # ⚡ كاش نتائج البحث
+    final = response or ("لم أتمكن من معالجة نتائج البحث العميق. 🤖" if language == "ar" else "I couldn't process deep search results. 🤖")
+    if final and response:
+        _set_cached_search(f"deep:{query}", language, final)
+    return final
 
 
 async def deep_search_and_summarize_async(query: str, language: str = "ar", memory_context: str = "", user_id: int = None, username: str = None, progress_callback=None) -> str:

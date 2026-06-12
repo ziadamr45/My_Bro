@@ -3,8 +3,8 @@
 الخطه الشامله مع per-model API keys:
 🧠 Chat Free: Mistral Small → Mistral Nemo → Llama 3.3 70B → DeepSeek V4 Flash (heavy) → SambaNova
 🧠 Chat Premium: Mistral Large → Mistral Medium → Kimi K2.6 → MiniMax M2.7 → GLM 5.1 → DeepSeek V4 Pro (heavy)
-⚡ Simple Free: Mistral Small → Llama 3.3 70B → Step 3.7 Flash → SambaNova
-⚡ Simple Premium: Mistral Small → Step 3.7 Flash → Mistral Medium
+⚡ Simple Free: Groq Llama 3.3 70B → Mistral Small → Llama 3.3 70B → Step 3.7 Flash → SambaNova
+⚡ Simple Premium: Groq Llama 3.3 70B → Mistral Small → Step 3.7 Flash → Mistral Medium
 🔥 Deep Search Premium: DeepSeek V4 Pro → Kimi K2.6 → MiniMax M2.7 → Mistral Large
 👨‍💻 Coding Free: Step 3.7 Flash → Codestral → Mistral Small → SambaNova
 👨‍💻 Coding Premium: GLM 5.1 → DeepSeek V4 Pro → Kimi K2.6 → Codestral → Mistral Large
@@ -41,6 +41,7 @@ _api_semaphore = asyncio.Semaphore(10)
 from config import (
     SAMBANOVA_API_KEY, SAMBANOVA_BASE_URL,
     MISTRAL_API_KEY, MISTRAL_BASE_URL,
+    GROQ_API_KEY, GROQ_BASE_URL,
     NVIDIA_BASE_URL, NVIDIA_GENAI_BASE_URL,
     CHAT_MODELS, SIMPLE_MODELS, DEEP_SEARCH_MODELS,
     CODING_MODELS, SUMMARY_MODELS, VISION_MODELS,
@@ -118,6 +119,14 @@ class ProviderManager:
                 "base_url": SAMBANOVA_BASE_URL,
             }
             logger.info("✅ SambaNova provider configured (Free fallback)")
+
+        # Groq (⚡ أسرع نموذج — sub-second inference للرسائل البسيطة)
+        if GROQ_API_KEY:
+            self.providers["groq"] = {
+                "api_key": GROQ_API_KEY,
+                "base_url": GROQ_BASE_URL,
+            }
+            logger.info("✅ Groq provider configured (⚡ Simple responses — sub-second inference)")
 
         if not self.providers:
             logger.error("❌ No AI providers configured!")
@@ -211,7 +220,7 @@ class ProviderManager:
 
         return routes_map.get(task_type, PREMIUM_CHAT_MODELS if is_premium_route else FREE_CHAT_MODELS)
 
-    def get_model_routes(self, task_type: str, ignore_cooldown: bool = False, user_id: int = None) -> List[ModelRoute]:
+    def get_model_routes(self, task_type: str, ignore_cooldown: bool = False, user_id: int = None, user_plan: str = None) -> List[ModelRoute]:
         """
         الحصول على مسارات النماذج لنوع مهمة معين
         يجرب كل مسار بالترتيب، بيتخطى المزودين/الموديلات اللي مش متاحة
@@ -220,11 +229,14 @@ class ProviderManager:
         """
         # تحديد خطة المستخدم
         # 🔴 الأمان: الـ default لازم يكون "free" — مش "premium"!
-        user_plan = "free"
-        if user_id is not None:
-            user_plan = self._get_user_plan(user_id)
+        if user_plan:
+            resolved_plan = user_plan
+        elif user_id is not None:
+            resolved_plan = self._get_user_plan(user_id)
+        else:
+            resolved_plan = "free"
 
-        model_list = self._get_model_list_for_task(task_type, user_plan)
+        model_list = self._get_model_list_for_task(task_type, resolved_plan)
 
         routes = []
         for i, model_config in enumerate(model_list):
@@ -259,10 +271,13 @@ class ProviderManager:
 
         return routes
 
-    def get_model_routes_for_user(self, user_id: int, task_type: str = "chat", ignore_cooldown: bool = False) -> List[ModelRoute]:
+    def get_model_routes_for_user(self, user_id: int, task_type: str = "chat", ignore_cooldown: bool = False, user_plan: str = None) -> List[ModelRoute]:
         """الحصول على مسارات النماذج بناءً على خطة المستخدم و التخصص"""
-        user_plan = self._get_user_plan(user_id)
-        model_list = self._get_model_list_for_task(task_type, user_plan)
+        if user_plan:
+            resolved_plan = user_plan
+        else:
+            resolved_plan = self._get_user_plan(user_id)
+        model_list = self._get_model_list_for_task(task_type, resolved_plan)
 
         routes = []
         for i, model_config in enumerate(model_list):
@@ -327,6 +342,21 @@ class ProviderManager:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        
+        # ⚡ Mistral Prompt Caching — كاش الـ system prompt على مستوى API
+        # Mistral بيكاش الـ system prompt لو كبير بما فيه كفاية
+        # ده بيقلل latency و cost بشكل كبير (1-4 ثواني أسرع بعد أول طلب)
+        if provider_name == "mistral" and messages and len(messages) > 0:
+            # بنضيف cache_control للـ system message
+            # لو أول رسالة هي system، نضيف cache marker
+            for msg in messages:
+                if msg.get("role") == "system":
+                    # Mistral بيكتشف تلقائياً لو الـ prompt يستحق caching
+                    # بس بنضيف cache_control عشان نضمن
+                    if isinstance(msg.get("content"), str) and len(msg["content"]) > 1000:
+                        # محتوى كبير بما يكفي للـ caching
+                        msg["cache_control"] = {"type": "ephemeral"}
+                    break
 
         try:
             logger.info(f"🤖 Calling {provider_name}/{model}")
@@ -549,6 +579,7 @@ class ProviderManager:
         max_tokens: int = 8192,
         timeout: int = None,
         user_id: int = None,
+        user_plan: str = None,
     ) -> Optional[str]:
         """
         استدعاء AI مع تبديل تلقائي بين المزودين والنماذج (متزامن)
@@ -556,12 +587,17 @@ class ProviderManager:
         + لو كل المسارات فشلت، يجرب على cooldown كـ fallback
         """
         # ⚡ بنحدد user_plan مرة واحدة هنا وبنمرره لباقي الكود
-        user_plan = self._get_user_plan(user_id) if user_id else "free"
-        routes = self.get_model_routes(task_type, user_id=user_id)
+        if user_plan:
+            resolved_plan = user_plan
+        elif user_id:
+            resolved_plan = self._get_user_plan(user_id)
+        else:
+            resolved_plan = "free"
+        routes = self.get_model_routes(task_type, user_id=user_id, user_plan=resolved_plan)
 
         if not routes:
             logger.warning("⚠️ All routes on cooldown, trying with cooldown ignored...")
-            routes = self.get_model_routes(task_type, ignore_cooldown=True, user_id=user_id)
+            routes = self.get_model_routes(task_type, ignore_cooldown=True, user_id=user_id, user_plan=resolved_plan)
             if not routes:
                 logger.error("🚨 No routes available at all!")
                 return None
@@ -574,8 +610,8 @@ class ProviderManager:
             elif task_type == "summary":
                 timeout = 25
             else:
-                # ⚡ بنستخدم user_plan اللي اتحدد فوق
-                if user_plan in ("admin", "premium"):
+                # ⚡ بنستخدم resolved_plan اللي اتحدد فوق
+                if resolved_plan in ("admin", "premium"):
                     timeout = 30
                 else:
                     timeout = 20
@@ -618,6 +654,7 @@ class ProviderManager:
         max_tokens: int = 8192,
         timeout: int = None,
         user_id: int = None,
+        user_plan: str = None,
     ) -> Optional[str]:
         """استدعاء AI (غير متزامن - لا يحجب event loop)
         
@@ -639,6 +676,7 @@ class ProviderManager:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=timeout,
+                    user_plan=user_plan,
                 )
             )
 
@@ -649,6 +687,7 @@ class ProviderManager:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
+                user_plan=user_plan,
             )
         )
 
@@ -660,22 +699,26 @@ class ProviderManager:
         temperature: float = 0.7,
         max_tokens: int = 8192,
         timeout: int = None,
+        user_plan: str = None,
     ) -> Optional[str]:
         """استدعاء AI مع مسارات مخصصة للمستخدم (متزامن)
         ⚡ أول 2 مسارات بالتوازي، لو فشلوا يجرب الباقي بالترتيب
         """
         # ⚡ بنحدد user_plan مرة واحدة هنا
-        user_plan = self._get_user_plan(user_id)
+        if user_plan:
+            resolved_plan = user_plan
+        else:
+            resolved_plan = self._get_user_plan(user_id)
         
-        routes = self.get_model_routes_for_user(user_id, task_type)
+        routes = self.get_model_routes_for_user(user_id, task_type, user_plan=resolved_plan)
 
         if not routes:
-            routes = self.get_model_routes_for_user(user_id, task_type, ignore_cooldown=True)
+            routes = self.get_model_routes_for_user(user_id, task_type, ignore_cooldown=True, user_plan=resolved_plan)
             if not routes:
-                routes = self.get_model_routes(task_type)
+                routes = self.get_model_routes(task_type, user_plan=resolved_plan)
 
         if not routes:
-            routes = self.get_model_routes(task_type, ignore_cooldown=True)
+            routes = self.get_model_routes(task_type, ignore_cooldown=True, user_plan=resolved_plan)
 
         if not routes:
             logger.error("🚨 No routes available at all!")
@@ -689,8 +732,8 @@ class ProviderManager:
             elif task_type == "summary":
                 timeout = 25
             else:
-                # ⚡ بنستخدم user_plan اللي اتحدد فوق
-                if user_plan in ("admin", "premium"):
+                # ⚡ بنستخدم resolved_plan اللي اتحدد فوق
+                if resolved_plan in ("admin", "premium"):
                     timeout = 30
                 else:
                     timeout = 20
@@ -734,11 +777,16 @@ class ProviderManager:
         max_tokens: int = 8192,
         timeout: int = None,
         user_id: int = None,
+        user_plan: str = None,
     ) -> Optional[str]:
         """استدعاء AI مع system prompt منفصل (متزامن)"""
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            sys_msg = {"role": "system", "content": system_prompt}
+            # ⚡ Mistral Prompt Caching
+            if len(system_prompt) > 1000:
+                sys_msg["cache_control"] = {"type": "ephemeral"}
+            messages.append(sys_msg)
         messages.append({"role": "user", "content": prompt})
         return self.call_sync(
             messages=messages,
@@ -747,6 +795,7 @@ class ProviderManager:
             max_tokens=max_tokens,
             timeout=timeout,
             user_id=user_id,
+            user_plan=user_plan,
         )
 
     async def call_with_system_prompt_async(
@@ -758,11 +807,16 @@ class ProviderManager:
         max_tokens: int = 8192,
         timeout: int = None,
         user_id: int = None,
+        user_plan: str = None,
     ) -> Optional[str]:
         """استدعاء AI مع system prompt منفصل (غير متزامن)"""
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            sys_msg = {"role": "system", "content": system_prompt}
+            # ⚡ Mistral Prompt Caching
+            if len(system_prompt) > 1000:
+                sys_msg["cache_control"] = {"type": "ephemeral"}
+            messages.append(sys_msg)
         messages.append({"role": "user", "content": prompt})
         return await self.call_async(
             messages=messages,
@@ -771,6 +825,7 @@ class ProviderManager:
             max_tokens=max_tokens,
             timeout=timeout,
             user_id=user_id,
+            user_plan=user_plan,
         )
 
     # ═══════════════════════════════════════
@@ -1214,6 +1269,7 @@ async def call_ai(
     max_tokens: int = 8192,
     prefer_arabic: bool = False,
     user_id: int = None,
+    user_plan: str = None,
 ) -> Optional[str]:
     """
     استدعاء AI عبر Provider Manager (غير متزامن)
@@ -1228,7 +1284,11 @@ async def call_ai(
     if isinstance(prompt, list):
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            sys_msg = {"role": "system", "content": system_prompt}
+            # ⚡ Mistral Prompt Caching
+            if len(system_prompt) > 1000:
+                sys_msg["cache_control"] = {"type": "ephemeral"}
+            messages.append(sys_msg)
         messages.extend(prompt)
         return await manager.call_async(
             messages=messages,
@@ -1236,6 +1296,7 @@ async def call_ai(
             temperature=temperature,
             max_tokens=max_tokens,
             user_id=user_id,
+            user_plan=user_plan,
         )
 
     # لو prompt نص عادي
@@ -1246,6 +1307,7 @@ async def call_ai(
         temperature=temperature,
         max_tokens=max_tokens,
         user_id=user_id,
+        user_plan=user_plan,
     )
 
 
@@ -1257,6 +1319,7 @@ def call_ai_sync(
     max_tokens: int = 8192,
     prefer_arabic: bool = False,
     user_id: int = None,
+    user_plan: str = None,
 ) -> Optional[str]:
     """
     استدعاء AI عبر Provider Manager (متزامن)
@@ -1273,4 +1336,5 @@ def call_ai_sync(
         temperature=temperature,
         max_tokens=max_tokens,
         user_id=user_id,
+        user_plan=user_plan,
     )

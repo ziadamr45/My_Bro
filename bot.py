@@ -52,6 +52,57 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ⚡ كاش أخبار AI المسبق — يتجهز في الخلفية كل ساعة
+_precomputed_news_cache = {
+    "ar": {"summary": "", "updated_at": 0},
+    "en": {"summary": "", "updated_at": 0},
+}
+_NEWS_CACHE_TTL = 3600  # 1 ساعة
+
+
+async def _precompute_news_background():
+    """حساب أخبار AI في الخلفية — يتجهز كل ساعة عشان الرد يكون فوري"""
+    global _precomputed_news_cache
+
+    while True:
+        try:
+            for lang in ["ar", "en"]:
+                logger.info(f"📰 Pre-computing AI news summary ({lang})...")
+
+                if lang == "ar":
+                    query = "أحدث أخبار الذكاء الاصطناعي اليوم"
+                else:
+                    query = "latest artificial intelligence news today"
+
+                # استخدم البحث العادي (مش عميق) عشان يكون أسرع
+                from web_search import search_and_summarize_async
+                summary = await search_and_summarize_async(query, language=lang)
+
+                if summary:
+                    import time as _time
+                    _precomputed_news_cache[lang] = {
+                        "summary": summary,
+                        "updated_at": _time.time(),
+                    }
+                    logger.info(f"📰 Pre-computed AI news ({lang}): {len(summary)} chars")
+                else:
+                    logger.warning(f"📰 Failed to pre-compute AI news ({lang})")
+
+        except Exception as e:
+            logger.error(f"📰 News pre-computation error: {e}")
+
+        # انتظر ساعة قبل التحديث
+        await asyncio.sleep(3600)
+
+
+def get_precomputed_news(language: str = "ar") -> str:
+    """الحصول على أخبار AI المسبقة — فوري من الكاش"""
+    import time as _time
+    cache = _precomputed_news_cache.get(language, {})
+    if cache.get("summary") and _time.time() - cache.get("updated_at", 0) < _NEWS_CACHE_TTL:
+        return cache["summary"]
+    return None  # الكاش منتهي أو فاضي — هيضطر يبحث
+
 
 # ═══════════════════════════════════════
 # بث الأخبار اليومية - Daily News Broadcast
@@ -539,6 +590,10 @@ def main():
         # تشغيل الجدولة
         _scheduler.start()
         logger.info("✅ APScheduler started - news broadcasts scheduled")
+
+        # ⚡ بدء حساب الأخبار في الخلفية
+        asyncio.create_task(_precompute_news_background())
+        logger.info("📰 News pre-computation background task started")
 
     # Graceful shutdown handler for SIGTERM
     _shutdown_requested = False

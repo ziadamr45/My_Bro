@@ -462,7 +462,7 @@ def build_context_for_ai(user_id: int, current_message: str,
             context_limit = CONTEXT_MESSAGES_PREMIUM  # ⭐ Premium: 80 رسالة سياق
             is_premium_user = True
         else:
-            context_limit = 20  # 🆓 Free: 20 رسالة سياق بس
+            context_limit = 10  # 🆓 Free: 10 رسائل سياق (⚡提速: 20→10 — input tokens أقل)
     except Exception:
         context_limit = CONTEXT_MESSAGES_FOR_AI
     

@@ -100,10 +100,12 @@ PREMIUM_CHAT_MODELS = [
 CHAT_MODELS = PREMIUM_CHAT_MODELS
 
 # ⚡ Simple - الرسائل البسيطة (تحيات، أسئلة قصيرة، أسئلة هوية)
-# FREE: Mistral Small → Llama 3.3 70B → Step 3.7 Flash → SambaNova
-# PREMIUM: Mistral Small → Step 3.7 Flash → Mistral Medium
+# FREE: Groq Llama 3.3 70B → Mistral Small → Llama 3.3 70B → Step 3.7 Flash → SambaNova
+# PREMIUM: Groq Llama 3.3 70B → Mistral Small → Step 3.7 Flash → Mistral Medium
 FREE_SIMPLE_MODELS = [
-    # ⚡ Mistral Small — أسرع رد فوري
+    # ⚡ Groq Llama 3.3 70B — أسرع رد فوري (sub-second inference)
+    {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+    # ⚡ Mistral Small — fallback سريع
     {"provider": "mistral", "model": "mistral-small-latest"},
     # ⚡ NVIDIA Llama 3.3 70B
     {"provider": "nvidia", "model": "meta/llama-3.3-70b-instruct", "api_key": NVIDIA_LLAMA_33_70B_KEY},
@@ -114,7 +116,9 @@ FREE_SIMPLE_MODELS = [
 ]
 
 PREMIUM_SIMPLE_MODELS = [
-    # ⚡ Mistral Small — أسرع رد فوري
+    # ⚡ Groq Llama 3.3 70B — أسرع رد فوري (sub-second inference)
+    {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+    # ⚡ Mistral Small — fallback سريع
     {"provider": "mistral", "model": "mistral-small-latest"},
     # ⚡ NVIDIA Step 3.7 Flash — سريع
     {"provider": "nvidia", "model": "stepfun-ai/step-3.7-flash", "api_key": NVIDIA_STEP_37_FLASH_KEY},

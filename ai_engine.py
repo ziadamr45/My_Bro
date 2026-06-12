@@ -21,6 +21,10 @@ from config import (
     DEVELOPER_USER_ID, DEVELOPER_USERNAME,
 )
 
+# ⚡ كاش الـ System Prompt الأساسي — بنتبني مرة واحدة لكل لغة
+# مش كل رسالة — وفرنا بناء 1500+ حرف كل مرة
+_base_system_cache = {}  # {"ar": "...", "en": "..."}
+
 
 def _get_current_date_context(lang: str = "ar") -> str:
     """تجهيز سياق التاريخ الحالي للـ system prompt"""
@@ -35,6 +39,18 @@ def _get_current_date_context(lang: str = "ar") -> str:
         return t("ai.date_context", lang, date=date_str, time=now.strftime('%H:%M'))
 
 logger = logging.getLogger(__name__)
+
+# ⚡ أخبار AI مسبقة — لو المستخدم يسأل عن أخبار AI نرد فوري من الكاش
+def _is_news_query(text: str) -> bool:
+    """كشف هل المستخدم بيسأل عن أخبار AI"""
+    text_lower = text.lower().strip()
+    news_triggers = [
+        "ايه اخبار", "أيه أخبار", "اخبار الذكاء", "أخبار الذكاء",
+        "اخبار ai", "أخبار ai", "اخبار الذكاء الاصطناعي",
+        "آخر أخبار", "اخبار اليوم", "ai news",
+        "latest ai news", "ai updates", "what's new in ai",
+    ]
+    return any(t in text_lower for t in news_triggers)
 
 # ═══════════════════════════════════════
 # كشف نية المستخدم - Intent Detection
@@ -467,6 +483,52 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
         # عن طريق تعيين is_identity = True مؤقتاً عشان ميرحش للبحث
         is_identity = True
 
+    # ⚡ Template responses for greetings — فوري بدون AI call
+    _GREETING_TEMPLATES = {
+        "ar": {
+            "السلام عليكم": "وعليكم السلام ورحمة الله وبركاته 🤲",
+            "سلام عليكم": "وعليكم السلام ورحمة الله وبركاته 🤲",
+            "اهلا": "أهلاً بييك! إزيك؟ 😊",
+            "أهلا": "أهلاً بييك! إزيك؟ 😊",
+            "اهلاً": "أهلاً بييك! إزيك؟ 😊",
+            "مرحبا": "أهلاً! إزيك عامل إيه؟ 👋",
+            "هاي": "أهلاً! إزيك؟ 😄",
+            "ازيك": "الحمد لله تمام، إزيك إنت؟ 😊",
+            "إزيك": "الحمد لله تمام، إزيك إنت؟ 😊",
+            "صباح الخير": "صباح النور! ☀️",
+            "مساء الخير": "مساء النور! 🌙",
+            "شكرا": "العفو، في أي وقت! 😊",
+            "شكراً": "العفو، في أي وقت! 😊",
+        },
+        "en": {
+            "hello": "Hey! How's it going? 👋",
+            "hi": "Hi there! How can I help? 😊",
+            "hey": "Hey! What's up? 😄",
+            "good morning": "Good morning! ☀️",
+            "good evening": "Good evening! 🌙",
+            "thanks": "Anytime! 😊",
+            "thank you": "You're welcome! 😊",
+        }
+    }
+
+    if is_greeting_msg:
+        msg_lower = user_message.strip().lower()
+        # Remove punctuation
+        msg_clean = re.sub(r'[^\w\s\u0600-\u06FF]', '', msg_lower).strip()
+        templates = _GREETING_TEMPLATES.get(language, _GREETING_TEMPLATES["ar"])
+        template_response = templates.get(msg_clean)
+        if template_response:
+            logger.info(f"⚡ Instant greeting template for: {msg_clean}")
+            # حفظ في الذاكرة
+            if user_id:
+                try:
+                    from memory import save_conversation
+                    save_conversation(user_id, "user", user_message[:1000])
+                    save_conversation(user_id, "bot", template_response[:1000])
+                except Exception:
+                    pass
+            return template_response
+
     # ⚡ كشف نوع المهمة بدري — عشان نعمل Cache check
     early_task_type = "simple" if (is_identity and len(user_message) < 30) or is_greeting_msg else detect_task_type(user_message)
 
@@ -512,6 +574,26 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
         logger.info(f"🔥 Deep search needed for: {user_message[:50]}")
         from web_search import deep_search_and_summarize_async
         return await deep_search_and_summarize_async(user_message, language, memory_context=memory_context, user_id=user_id, username=username)
+
+    # ⚡ أخبار AI مسبقة — لو المستخدم بيسأل عن أخبار AI نرد فوري من الكاش
+    if _is_news_query(user_message):
+        try:
+            from bot import get_precomputed_news
+            precomputed = get_precomputed_news(language)
+            if precomputed:
+                logger.info(f"📰 Instant news response from pre-computed cache!")
+                if user_id:
+                    try:
+                        from memory import save_conversation
+                        save_conversation(user_id, "user", user_message[:1000])
+                        save_conversation(user_id, "bot", precomputed[:1000])
+                    except Exception:
+                        pass
+                return precomputed
+        except ImportError:
+            pass  # مش متاح في بيئة معينة
+        except Exception as e:
+            logger.debug(f"📰 Pre-computed news check failed: {e}")
 
     # 3. كشف هل محتاج بحث في الويب عادي (بس مش لو سؤال هوية)
     if not is_identity and needs_web_search(user_message):
@@ -592,8 +674,12 @@ Made with love in Egypt 🇪🇬"""
     # 6. بناء الـ System Prompt المحسن
     date_context = _get_current_date_context(language)
 
-    if language == "ar":
-        system = f"""أنت "My Bro" — مساعد ذكاء اصطناعي شخصي. اسمك الوحيد My Bro.
+    # ⚡ كاش الـ System Prompt الأساسي — بنتبني مرة واحدة لكل لغة
+    cache_key = f"{language}"
+    if cache_key not in _base_system_cache:
+        # أول مرة — نبني الـ base prompt ونخزنه
+        if language == "ar":
+            _base_system_cache[cache_key] = """أنت "My Bro" — مساعد ذكاء اصطناعي شخصي. اسمك الوحيد My Bro.
 
 🔴🔴🔴 أهم قاعدة: إنت مصري 100% — بتتكلم باللهجة المصرية بس! ممنوع كلمات خليجية زي: "يا خوي" "شلونك" "زين" "عساك بخير" "ما قصرت" "الله يعطيك العافية" "أبشر" "تسلم". لو استخدمتها ده خطأ! ماتقلش "مش خليجي" — إنت بس مصري وبتتكلم مصري، خلاص.
 
@@ -635,35 +721,15 @@ Made with love in Egypt 🇪🇬"""
 ══️ إملاء ═══
 🔴 تنوين الفتح على الحرف قبل الألف: ✅ "مرتفعًا" مش ❌ "مرتفعاً"
 
-{date_context}
+{{DATE_CONTEXT}}
 ماتقولش إن معلوماتك قديمة — إنت متصل بالإنترنت وبتقدر تبحث.
 
 قدراتك: 📰 أخبار AI • 🔍 بحث • 👁️ تحليل صور • 📚 تعلم • 🗺️ خرائط • 🧠 ذاكرة • 💻 برمجة • 📄 PDF • 🎬 YouTube • 📚 دراسة • 🎨 إنشاء صور • 🖌️ تعديل صور
 أسسك: زياد عمرو (بحرف الياء مش الدال!) — مطور مصري. اتعملت بحب في مصر 🇪🇬.
 
 رد بالعربية المصرية المحترمة والمتوازنة."""
-        if memory_context:
-            system += f"""
-
-═══ 🧠 ذاكرة المحادثة — مهم جداً ═══
-🔴 لازم تستخدم المعلومات دي في ردك! ده السياق اللي بيخلّي المحادثة مستمرة ومتقطعةش!
-- لو المستخدم سأل عن موضوع اهتم بيه قبل كده، اذكر إنك فاكر اهتمامه
-- لو بيسأل سؤال متعلق بمحادثة سابقة، رد بناءً على السياق
-- لو المستخدم premium، عامله كعميل مهم
-- استخدم اسم المستخدم لو معروف
-- ماتتصرفش كأنك مش فاكر حاجة — إنت فاكر كل اللي في السياق ده!
-
-{memory_context}"""
-        if creator_context:
-            system += f"""
-
-{creator_context}"""
-        if admin_context:
-            system += f"""
-
-{admin_context}"""
-    else:
-        system = f"""You are "My Bro" — a personal AI assistant. Your only name is My Bro.
+        else:
+            _base_system_cache[cache_key] = """You are "My Bro" — a personal AI assistant. Your only name is My Bro.
 
 ═══ Identity & Personality ═══
 - Name: My Bro. Say "I'm My Bro" when asked who you are.
@@ -701,13 +767,40 @@ Ziad Amr (@ziadamr) — Egyptian web developer. Founder of Qudra Tech. Specializ
 ═══ Arabic Orthography ═══
 🔴 Tanween fatha goes on the letter BEFORE alef: ✅ "مرتفعًا" not ❌ "مرتفعاً"
 
-{date_context}
+{{DATE_CONTEXT}}
 NEVER say your knowledge is outdated — you're connected to the internet and can search.
 
 Your capabilities: 📰 AI News • 🔍 Search • 👁️ Image Analysis • 📚 Learning • 🗺️ Roadmaps • 🧠 Memory • 💻 Coding • 📄 PDF • 🎬 YouTube • 📚 Study Mode • 🎨 Image Gen • 🖌️ Image Edit
 Your creator: Ziad Amr (spelled Z-I-A-D, NOT Zid!) — Egyptian Developer. Made with love in Egypt 🇪🇬.
 
 Respond in English naturally and clearly."""
+
+    # استبدال {{DATE_CONTEXT}} بالتاريخ الحالي
+    system = _base_system_cache[cache_key].replace("{{DATE_CONTEXT}}", date_context)
+
+    # إضافة السياق الديناميكي (ذاكرة، مؤسس، أدمن)
+    if language == "ar":
+        if memory_context:
+            system += f"""
+
+═══ 🧠 ذاكرة المحادثة — مهم جداً ═══
+🔴 لازم تستخدم المعلومات دي في ردك! ده السياق اللي بيخلّي المحادثة مستمرة ومتقطعةش!
+- لو المستخدم سأل عن موضوع اهتم بيه قبل كده، اذكر إنك فاكر اهتمامه
+- لو بيسأل سؤال متعلق بمحادثة سابقة، رد بناءً على السياق
+- لو المستخدم premium، عامله كعميل مهم
+- استخدم اسم المستخدم لو معروف
+- ماتتصرفش كأنك مش فاكر حاجة — إنت فاكر كل اللي في السياق ده!
+
+{memory_context}"""
+        if creator_context:
+            system += f"""
+
+{creator_context}"""
+        if admin_context:
+            system += f"""
+
+{admin_context}"""
+    else:
         if memory_context:
             system += f"""
 
@@ -771,9 +864,9 @@ Examples:
         # المجاني max_tokens أقل — ردود مختصرة أكتر
         # ⚡ بنستخدم is_premium_user من build_context_for_ai() عشان م نعملش DB query تاني
         if is_premium_user:
-            max_tokens = 32768  # ⭐ Premium: ردود طويلة جداً وشاملة
+            max_tokens = 16384  # ⭐ Premium: ردود شاملة (⚡提速: 32768→16384)
         else:
-            max_tokens = 8192  # 🆓 Free: ردود كاملة
+            max_tokens = 4096  # 🆓 Free: ردود كاملة (⚡提速: 8192→4096)
 
     # بناء رسائل المحادثة الكاملة مع السياق
     messages_for_ai = []
@@ -782,6 +875,9 @@ Examples:
         messages_for_ai.extend(conversation_history)
     # إضافة رسالة المستخدم الحالية
     messages_for_ai.append({"role": "user", "content": user_message})
+
+    # ⚡ Speed: تحديد user_plan مرة واحدة — avoid redundant DB query في Provider Manager
+    _user_plan = "premium" if is_premium_user else "free"
 
     # محاولة 1: النوع العادي
     # 🔴 FIX: دايماً نبعت messages_for_ai (list) — مش string!
@@ -793,6 +889,7 @@ Examples:
         temperature=0.7 if task_type != "simple" else 0.5,  # أقل creativity للرسائل البسيطة
         max_tokens=max_tokens,
         user_id=user_id,  # Pass user_id for model selection based on plan
+        user_plan=_user_plan,  # ⚡ Speed: avoid redundant DB query
     )
 
     # محاولة 2: Fallback لو simple فشلت
@@ -805,6 +902,7 @@ Examples:
             temperature=0.5,
             max_tokens=300,  # برضو رد قصير في الـ fallback
             user_id=user_id,
+            user_plan=_user_plan,  # ⚡ Speed: avoid redundant DB query
         )
 
     # محاولة 3: Retry بعد 3 ثواني (الـ cooldownات 30 ثانية فهتخلص بسرعة لو فشل model واحد)
@@ -818,6 +916,7 @@ Examples:
             temperature=0.7,
             max_tokens=max_tokens,
             user_id=user_id,
+            user_plan=_user_plan,  # ⚡ Speed: avoid redundant DB query
         )
 
     if response is None:
