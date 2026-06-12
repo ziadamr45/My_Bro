@@ -1435,9 +1435,13 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         platform_display = platform_names.get(platform, platform)
         
         # Send progress message
+        _is_audio_dl = (quality == "audio" or quality.startswith("audio_"))
         if is_threads:
             # 🔴 Threads فيديو → هيترفع على السحابة مباشرة
             await _send_whatsapp_message(wa_id, f"🧵 جاري تحميل فيديو Threads ورفعه على السحابة...")
+        elif _is_audio_dl:
+            # 🔴 FIX: لو تحميل صوت → نقول صوت مش فيديو
+            await _send_whatsapp_message(wa_id, f"🎵 جاري تحميل الصوت من {platform_display}...")
         else:
             await _send_whatsapp_message(wa_id, f"📥 جاري تحميل الفيديو من {platform_display}...")
         
