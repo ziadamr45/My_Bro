@@ -405,6 +405,16 @@ def _download_video_with_fallback(url: str, quality: str, output_dir: str) -> di
                 },
             }
             
+            # 🔴 FIX: إضافة كوكيز لو موجودة (زي المحاولة الأولى)
+            if os.path.exists(cookies_path):
+                try:
+                    with open(cookies_path, 'r') as f:
+                        content = f.read()
+                        if content.strip() and len(content) > 50:
+                            ydl_opts['cookiefile'] = cookies_path
+                except:
+                    pass
+            
             if not is_audio:
                 ydl_opts['merge_output_format'] = 'mp4'
                 ydl_opts['remux_video'] = 'mp4'
@@ -516,6 +526,16 @@ async def download(
     video_description = ""
     try:
         info_opts = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'extractor_args': {'youtube': {'player_client': ['android', 'web']}}}
+        # 🔴 FIX: إضافة كوكيز لو موجودة
+        cookies_path_check = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        if os.path.exists(cookies_path_check):
+            try:
+                with open(cookies_path_check, 'r') as f:
+                    c = f.read()
+                    if c.strip() and len(c) > 50:
+                        info_opts['cookiefile'] = cookies_path_check
+            except:
+                pass
         with yt_dlp.YoutubeDL(info_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if info:
@@ -681,6 +701,16 @@ async def get_info(
             'skip_download': True,
             'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         }
+        # 🔴 FIX: إضافة كوكيز لو موجودة
+        cookies_path_info = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        if os.path.exists(cookies_path_info):
+            try:
+                with open(cookies_path_info, 'r') as f:
+                    c = f.read()
+                    if c.strip() and len(c) > 50:
+                        ydl_opts['cookiefile'] = cookies_path_info
+            except:
+                pass
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
