@@ -171,7 +171,8 @@ def get_total_users(platform: str = None) -> int:
         else:
             row = _execute("SELECT COUNT(*) FROM user_profiles", fetchone=True)
         return row[0] if row else 0
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not get total users: {e}")
         return 0
 
 
@@ -185,7 +186,8 @@ def get_total_subscribers(platform: str = None) -> int:
             ph = "%s" if _is_postgres() else "?"
             row = _execute(f"SELECT COUNT(*) FROM user_profiles WHERE subscribed = {ph}", (1,), fetchone=True)
         return row[0] if row else 0
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not get total subscribers: {e}")
         return 0
 
 
@@ -199,7 +201,8 @@ def get_total_premium(platform: str = None) -> int:
             ph = "%s" if _is_postgres() else "?"
             row = _execute(f"SELECT COUNT(*) FROM premium_users WHERE plan = {ph}", ("premium",), fetchone=True)
         return row[0] if row else 0
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not get total premium users: {e}")
         return 0
 
 

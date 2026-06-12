@@ -150,12 +150,25 @@ def send_split_message(message: str) -> bool:
     parts = message.split("━━━━━━━━━━━━━━━━━")
 
     if len(parts) <= 2:
-        # لو مفيش تقسيم واضح، نقطع بالطول
+        # لو مفيش تقسيم واضح، نقطع بالطول بذكاء
         chunks = []
         while len(message) > 4000:
-            # البحث عن أقرب سطر جديد
-            split_point = message.rfind("\n\n", 0, 4000)
-            if split_point == -1:
+            # البحث عن أفضل نقطة تقسيم (بالأولوية)
+            split_point = -1
+            for marker in ["\n\n", "\n", " • ", " "]:
+                pos = message.rfind(marker, 0, 4000)
+                if pos > 0:
+                    split_point = pos + len(marker)
+                    break
+            # لو ملقيناش نقطة كويسة، نقطع عند آخر جملة
+            if split_point <= 0:
+                for end_char in [".", "؟", "،", "!", "؛"]:
+                    pos = message.rfind(end_char, 0, 4000)
+                    if pos > 0:
+                        split_point = pos + 1
+                        break
+            # آخر حل: قطع على 4000
+            if split_point <= 0:
                 split_point = 4000
             chunks.append(message[:split_point])
             message = message[split_point:]

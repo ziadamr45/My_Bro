@@ -418,7 +418,8 @@ def get_premium_info(user_id: int, lang: str = "ar") -> dict:
                         result["expires_display"] = t("premium.less_than_day", lang, hours=hours_left, date=expires_dt.strftime('%Y-%m-%d %H:%M'))
                     else:
                         result["expires_display"] = t("premium.expiring_soon", lang, date=expires_dt.strftime('%Y-%m-%d'))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not format expires display: {e}")
                 result["expires_display"] = result["premium_expires"][:10] if result["premium_expires"] else "—"
         else:
             result["remaining_days"] = 0  # 0 = مدى الحياة
@@ -547,7 +548,8 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
                     result["time_on_current_plan"] = t("premium.months_and_days", lang, months=months, days=remaining_days)
                 else:
                     result["time_on_current_plan"] = t("premium.days_only", lang, days=days_on_plan)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not calculate days on plan: {e}")
                 result["days_on_current_plan"] = 0
                 result["time_on_current_plan"] = t("premium.not_specified", lang)
         else:
@@ -572,7 +574,8 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
                     result["time_on_bot"] = t("premium.months_and_days", lang, months=months, days=remaining)
                 else:
                     result["time_on_bot"] = t("premium.days_only", lang, days=days_on_bot)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not calculate days on bot: {e}")
                 result["days_on_bot"] = 0
                 result["time_on_bot"] = t("premium.not_specified", lang)
         else:
@@ -665,7 +668,8 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
         try:
             from admin import is_admin
             result["is_admin"] = is_admin(user_id)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not check admin status: {e}")
             result["is_admin"] = False
         
     except Exception as e:

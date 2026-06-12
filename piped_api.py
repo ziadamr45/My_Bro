@@ -702,6 +702,7 @@ def check_piped_health() -> Dict:
                     "status": f"http_{resp.status_code}",
                 })
         except Exception as e:
+            logger.debug(f"Piped instance {instance} status check error: {e}")
             results["instances_status"].append({
                 "instance": instance,
                 "status": f"error: {str(e)[:50]}",

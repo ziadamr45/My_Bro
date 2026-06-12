@@ -5,7 +5,10 @@ WhatsApp Bot Package
 التركيب:
 - whatsapp/state.py     → الثوابت والحالة المشتركة والأدوات المساعدة
 - whatsapp/api.py       → دوال إرسال الرسائل والتواصل مع WhatsApp API
-- whatsapp/media.py     → تحميل ومعالجة الميديا (فيديو، صوت، صور)
+- whatsapp/media.py           → تحميل ومعالجة الميديا (thin shim)
+- whatsapp/media_image.py     → إنشاء وتعديل الصور بالذكاء الاصطناعي
+- whatsapp/media_download.py  → تحميل الفيديو واختيار الجودة
+- whatsapp/media_processing.py → تحليل الصوت والصور والمستندات
 - whatsapp/commands.py  → معالجة الأوامر (/grant, /ban, /download, etc.)
 - whatsapp/callbacks.py → معالجة الردود التفاعلية و webhook handlers
 

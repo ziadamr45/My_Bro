@@ -526,7 +526,8 @@ async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TY
             from memory import get_user
             user_data = get_user(target_id)
             target_name = user_data.get("name", "")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not get target name: {e}")
             target_name = ""
 
         name_display = f" ({target_name})" if target_name else ""
@@ -658,7 +659,8 @@ async def revoke_premium_command(update: Update, context: ContextTypes.DEFAULT_T
                 from memory import get_user
                 user_data = get_user(target_id)
                 target_name = user_data.get("name", "")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not get target name: {e}")
                 target_name = ""
             name_display = f" ({target_name})" if target_name else ""
             
@@ -680,7 +682,8 @@ async def revoke_premium_command(update: Update, context: ContextTypes.DEFAULT_T
             from memory import get_user
             user_data = get_user(target_id)
             target_name = user_data.get("name", "")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not get target name: {e}")
             target_name = ""
         name_display = f" ({target_name})" if target_name else ""
         
@@ -763,7 +766,8 @@ async def resetlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 from memory import get_user
                 user_data = get_user(target_id)
                 target_name = user_data.get("name", "")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not get target name: {e}")
                 target_name = ""
             name_display = f" ({target_name})" if target_name else ""
             
@@ -790,7 +794,8 @@ async def resetlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 from memory import get_user
                 user_data = get_user(target_id)
                 target_name = user_data.get("name", "")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Could not get target name: {e}")
                 target_name = ""
 
             name_display = f" ({target_name})" if target_name else ""
@@ -1219,7 +1224,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     telegram_bot=context.bot
                 )
                 success += 1
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Broadcast failed for user: {e}")
                 fail += 1
 
             # تحديث كل 10 رسائل
@@ -1664,7 +1670,8 @@ async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from memory import get_user
         user_data = get_user(target_id)
         target_name = user_data.get("name", "")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not get target name: {e}")
         target_name = ""
 
     name_display = f" ({target_name})" if target_name else ""
