@@ -14,3 +14,4 @@ venv/
 .vscode/
 *.log
 data/
+worklog.md
