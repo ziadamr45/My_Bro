@@ -150,6 +150,7 @@ _processed_message_ids = OrderedDict()
 _MAX_DEDUP_CACHE = 1000
 
 _wa_user_pdf_context = {}  # PDF context per user for follow-up Q&A
+_wa_user_yt_url = {}  # {wa_id: "youtube_url"} — 🍪 cache YouTube URL for download button
 
 # ═══════════════════════════════════════
 # نظام حالة المستخدم — Workflow State Management
@@ -4616,6 +4617,14 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
             "• Instagram\n"
             "• TikTok")
 
+    elif command == "download_yt":
+        # 🍪 تحميل فيديو YouTube اللي اتلخص ده — بنستخدم الرابط المخزّن
+        cached_url = _wa_user_yt_url.get(wa_id, "")
+        if cached_url:
+            await _download_and_send_video(wa_id, cached_url, wa_user_id, contact_name, message_id, is_admin)
+        else:
+            await _send_whatsapp_message(wa_id, "❌ مش قادر ألاقي رابط الفيديو. جرب /download مع الرابط مباشرة.")
+
     # ══════════════════════════════════════
     # VIDEO SEARCH / AUDIO SEARCH / PHOTO SEARCH
     # ══════════════════════════════════════
@@ -5640,6 +5649,7 @@ async def _handle_incoming_message(message: dict, value: dict):
                 "cmd_favorites": "favorites",
                 # Download
                 "cmd_download": "download",
+                "cmd_download_yt": "download_yt",
                 # Study
                 "cmd_study": "study",
                 "cmd_study_learn": "cmd_study_learn",
@@ -6894,6 +6904,7 @@ async def _handle_command_with_arg(wa_id: str, cmd_name: str, arg: str, wa_user_
         try:
             summary = await yt_agent.summarize_video(arg, language="ar", user_id=wa_user_id)
             if summary:
+                _wa_user_yt_url[wa_id] = arg  # 🍪 خزّن رابط YouTube عشان زر التحميل
                 summary_text = _strip_html_for_whatsapp(summary)
                 chunks = _split_whatsapp_message(summary_text)
                 for chunk in chunks:
@@ -6913,7 +6924,7 @@ async def _handle_command_with_arg(wa_id: str, cmd_name: str, arg: str, wa_user_
                 await _send_interactive_buttons(wa_id, body_text="عايز حاجة تانية؟",
                     buttons=[
                         {"id": "cmd_youtube", "title": "🎬 فيديو تاني"},
-                        {"id": "cmd_download", "title": "📥 حمّله"},
+                        {"id": "cmd_download_yt", "title": "📥 حمّله"},
                         {"id": "cmd_chat", "title": "💬 محادثة"},
                     ])
             else:

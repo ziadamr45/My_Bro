@@ -103,6 +103,15 @@ def _strip_non_telegram_html(text: str) -> str:
     # نشيل أسطر فاضية متكررة
     text = re.sub(r'\n{3,}', '\n\n', text)
     
+    # 🔴 إصلاح الـ tags المفتوحة بدون إغلاق — AI بيرجع <b> بدون </b>
+    # لو فيه unclosed tags (أكثر opening من closing)، نشيلهم كلهم خالص
+    for tag in ('b', 'i', 'u', 's', 'code', 'pre'):
+        open_count = len(re.findall(rf'<{tag}>', text, re.IGNORECASE))
+        close_count = len(re.findall(rf'</{tag}>', text, re.IGNORECASE))
+        if open_count > close_count:
+            # Unclosed tags — نشيلهم كلهم (opening + closing)
+            text = re.sub(rf'</?{tag}>', '', text, flags=re.IGNORECASE)
+    
     return text
 
 

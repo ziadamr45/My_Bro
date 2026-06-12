@@ -37,7 +37,7 @@ user_states = {}  # {user_id: {"state": str, "data": dict}}
 
 # ═══ Temporary storage for PDF/YouTube/Image context per user ═══
 _user_pdf_context = {}   # {user_id: {"text": str, "filename": str}}
-_user_yt_context = {}    # {user_id: {"url": str, "video_id": str, "title": str}}
+_user_yt_context = {}    # {user_id: {"url": str, "video_id": str, "title": str, "summary": str}}
 _user_image_context = {} # {user_id: {"image_base64": str, "user_text": str}}
 _user_trends = {}       # {user_id: [(keyword, count), ...]} — ترندات المستخدم عشان الأزرار المرقمة
 _user_truncated = {}    # {user_id: {"response": str, "user_message": str, "lang": str}} — آخر رد مقطوع عشان نكمله
@@ -368,16 +368,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
         try:
+            from ai_engine import call_ai
             from formatters import clean_ai_response, smart_split_message
-            info = await yt_agent.get_video_info(ctx["video_id"])
-            transcript = info.get("transcript", "")
-            if not transcript:
-                await query.message.reply_text(
-                    "❌ مش قادر أجيب نص الفيديو لاستخراج النقاط." if lang == "ar"
-                    else "❌ Can't get video transcript for key points."
-                )
-                return
-            result = await pdf_agent.extract_key_points(transcript, lang)
+            # 🍪 استخدم الملخص المخزّن بدل ما نعمل HTTP request جديد
+            summary_text = ctx.get("summary", "")
+            if not summary_text:
+                summary_text = ctx.get("url", "")
+            
+            if lang == "ar":
+                prompt = f"استخرج أهم النقاط الرئيسية من هذا الملخص بشكل مختصر ومنظم:\n\n{summary_text}\n\nاستخرج النقاط الرئيسية فقط. نص عادي بدون HTML."
+            else:
+                prompt = f"Extract the key points from this summary in a concise and organized way:\n\n{summary_text}\n\nExtract key points only. Plain text, no HTML."
+            
+            result = await call_ai(prompt, max_tokens=1500, user_id=user_id, task_type="summary")
             result = clean_ai_response(result)
             if len(result) > 4000:
                 chunks = smart_split_message(result)
@@ -404,8 +407,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action="typing")
         try:
+            from ai_engine import call_ai
             from formatters import clean_ai_response, smart_split_message
-            result = await yt_agent.create_quiz_from_video(ctx["url"], language=lang, user_id=user_id)
+            # 🍪 استخدم الملخص المخزّن بدل ما نعمل HTTP request جديد
+            summary_text = ctx.get("summary", "")
+            if not summary_text:
+                summary_text = ctx.get("url", "")
+            
+            if lang == "ar":
+                prompt = f"أنشئ كويز من 5 أسئلة اختيار متعدد بناءً على هذا الملخص:\n\n{summary_text}\n\nكل سؤال يكون فيه 4 خيارات وحدد الإجابة الصحيحة. نص عادي بدون HTML."
+            else:
+                prompt = f"Create a quiz with 5 multiple choice questions based on this summary:\n\n{summary_text}\n\nEach question should have 4 options and indicate the correct answer. Plain text, no HTML."
+            
+            result = await call_ai(prompt, max_tokens=1500, user_id=user_id, task_type="summary")
             result = clean_ai_response(result)
             if len(result) > 4000:
                 chunks = smart_split_message(result)

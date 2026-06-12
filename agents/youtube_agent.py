@@ -1258,12 +1258,12 @@ class YouTubeAgent:
 • لو فيه خطوات أو تعليمات — اذكرها بالترتيب
 
 🔴🔴🔴 قواعد صارمة:
-• ماتستخدمش Markdown أبداً (لا *, **, #, |, []). ماتستخدمش HTML tags غير المدعومة من تليجرام (لا <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط. الخلايا والعناصر خليها نص عادي من غير HTML tags.
+• ماتستخدمش Markdown أبداً (لا *, **, #, |, []). ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 • 🔴 ماتقولش أبداً إنك مش قادر تلخص!
 • 🔴 لازم تلخص المحتوى ده — ده وظيفتك!
 • 🔴 ابدأ بالملخص مباشرة بدون مقدمات
 
-أنت مساعد ذكي متخصص في تلخيص الفيديوهات. تلخص بالعربية بشكل منظم وواضح. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام. استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط."""
+أنت مساعد ذكي متخصص في تلخيص الفيديوهات. تلخص بالعربية بشكل منظم وواضح. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة."""
             else:
                 prompt = f"""Summarize the following video comprehensively in English:
 
@@ -1280,12 +1280,12 @@ Requirements:
 • If there are steps or instructions — list them in order
 
 🔴🔴🔴 Strict rules:
-• NEVER use Markdown (no *, **, #, |, []). NEVER use non-Telegram HTML tags (no <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+• NEVER use Markdown (no *, **, #, |, []). NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 • 🔴 NEVER say you cannot summarize!
 • 🔴 You MUST summarize this content!
 • 🔴 Start with the summary directly without introductions
 
-You are a smart assistant specialized in video summarization. NEVER use Markdown. NEVER use non-Telegram HTML tags. Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers."""
+You are a smart assistant specialized in video summarization. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines."""
 
             result = await call_ai(prompt, max_tokens=2000, user_id=user_id, task_type="summary")
             return clean_ai_response(result)
@@ -1299,7 +1299,7 @@ You are a smart assistant specialized in video summarization. NEVER use Markdown
 
 {web_info}
 
-لخص بشكل منظم بالعربية. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام (لا <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط. الخلايا والعناصر خليها نص عادي من غير HTML tags.
+لخص بشكل منظم بالعربية. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 
 🔴 ملاحظة: أنت بتلخص بناءً على معلومات من الويب لأن الترجمة مش متاحة للفيديو.
 🔴 ابدأ بالملخص مباشرة بدون مقدمات."""
@@ -1308,7 +1308,7 @@ You are a smart assistant specialized in video summarization. NEVER use Markdown
 
 {web_info}
 
-Summarize in English in an organized way. NEVER use Markdown. NEVER use non-Telegram HTML tags (no <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+Summarize in English in an organized way. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 
 🔴 Note: You are summarizing based on web information because captions are not available for this video.
 🔴 Start with the summary directly without introductions."""
@@ -1329,7 +1329,7 @@ Summarize in English in an organized way. NEVER use Markdown. NEVER use non-Tele
 📝 <b>الوصف:</b>
 {description[:5000]}
 
-اكتب ملخص تقريبي بالعربية بناءً على العنوان والوصف. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام. استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط.
+اكتب ملخص تقريبي بالعربية بناءً على العنوان والوصف. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 
 🔴 ابدأ بالملخص مباشرة. 🔴 وضّح إن ده ملخص تقريبي بناءً على الوصف فقط."""
             else:
@@ -1342,7 +1342,7 @@ Summarize in English in an organized way. NEVER use Markdown. NEVER use non-Tele
 📝 <b>Description:</b>
 {description[:5000]}
 
-Write an approximate summary in English based on the title and description. NEVER use Markdown. NEVER use non-Telegram HTML tags. Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+Write an approximate summary in English based on the title and description. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 
 🔴 Start with the summary directly. 🔴 Note this is an approximate summary based on the description only."""
 
@@ -1360,7 +1360,7 @@ Write an approximate summary in English based on the title and description. NEVE
 👤 <b>القناة:</b> {author or "غير معروف"}
 ⏱️ <b>المدة:</b> {duration_str or "غير معروف"}
 
-اكتب ملخص تقريبي بالعربية بناءً على العنوان. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام. استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط.
+اكتب ملخص تقريبي بالعربية بناءً على العنوان. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 
 🔴 ابدأ بالملخص مباشرة.
 🔴 وضّح إن ده ملخص تقريبي بناءً على العنوان فقط ومش محتوى الفيديو الكامل.
@@ -1372,7 +1372,7 @@ Write an approximate summary in English based on the title and description. NEVE
 👤 <b>Channel:</b> {author or "Unknown"}
 ⏱️ <b>Duration:</b> {duration_str or "Unknown"}
 
-Write an approximate summary in English based on the title. NEVER use Markdown. NEVER use non-Telegram HTML tags. Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+Write an approximate summary in English based on the title. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 
 🔴 Start with the summary directly.
 🔴 Note this is an approximate summary based on the title only, not the full video content.
@@ -1441,9 +1441,9 @@ Write an approximate summary in English based on the title. NEVER use Markdown. 
 ✅ <b>الإجابة الصحيحة:</b> [الحرف]
 💡 <b>الشرح:</b> [شرح مختصر]
 
-⚠️ ماتستخدمش Markdown (لا *, **, #, |). ماتستخدمش HTML tags غير المدعومة من تليجرام (لا <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط.
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 
-أنت مساعد تعليمي تنشئ كويزات من محتوى الفيديوهات. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام."""
+أنت مساعد تعليمي تنشئ كويزات من محتوى الفيديوهات. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة."""
         else:
             prompt = f"""Create a quiz from the video content ({num_questions} questions):
 
@@ -1464,9 +1464,9 @@ D) option 4
 ✅ <b>Answer:</b> [letter]
 💡 <b>Explanation:</b> [brief explanation]
 
-⚠️ NEVER use Markdown (no *, **, #, |). NEVER use non-Telegram HTML tags (no <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+⚠️ NEVER use Markdown (no *, **, #, |). NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 
-You are an educational assistant that creates quizzes from video content. NEVER use Markdown. NEVER use non-Telegram HTML tags."""
+You are an educational assistant that creates quizzes from video content. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines."""
 
         result = await call_ai(prompt, max_tokens=2000, user_id=user_id, task_type="chat")
         return clean_ai_response(result)
@@ -1530,9 +1530,9 @@ You are an educational assistant that creates quizzes from video content. NEVER 
 📝 <b>خلاصة:</b>
 ...
 
-⚠️ ماتستخدمش Markdown (لا *, **, #, |). ماتستخدمش HTML tags غير المدعومة من تليجرام (لا <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). استخدم بس: <b>عريض</b> <i>مائل</i> <code>كود</code> <pre>كود كبير</pre> • نقاط.
+⚠️ ماتستخدمش Markdown (لا *, **, #, |). ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة.
 
-أنت مساعد تعليمي تنشئ ملاحظات مراجعة شاملة. ماتستخدمش Markdown أبداً. ماتستخدمش HTML tags غير المدعومة من تليجرام."""
+أنت مساعد تعليمي تنشئ ملاحظات مراجعة شاملة. ماتستخدمش Markdown أبداً. ماتستخدمش أي HTML أبداً — لا <b>, <i>, <code>, أو أي tag. نص عادي فقط مع • نقاط وسطور جديدة."""
         else:
             prompt = f"""Create comprehensive review notes from the video content:
 
@@ -1560,9 +1560,9 @@ Notes format:
 📝 <b>Summary:</b>
 ...
 
-⚠️ NEVER use Markdown (no *, **, #, |). NEVER use non-Telegram HTML tags (no <div>, <p>, <span>, <ol>, <ul>, <li>, <h1>-<h6>, <style>). Use ONLY: <b>bold</b> <i>italic</i> <code>code</code> <pre>big code</pre> • bullets. Keep everything as plain text without HTML wrappers.
+⚠️ NEVER use Markdown (no *, **, #, |). NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines.
 
-You are an educational assistant that creates comprehensive review notes. NEVER use Markdown. NEVER use non-Telegram HTML tags."""
+You are an educational assistant that creates comprehensive review notes. NEVER use Markdown. NEVER use any HTML at all — no <b>, <i>, <code>, or any tag. Plain text only with • bullet points and newlines."""
 
         result = await call_ai(prompt, max_tokens=2000, user_id=user_id, task_type="summary")
         return clean_ai_response(result)

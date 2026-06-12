@@ -138,6 +138,7 @@ async def _process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYP
             "url": url,
             "video_id": video_id or "",
             "title": "",
+            "summary": summary,  # 🍪 خزّن الملخص عشان أزرار النقاط والكويز
         }
 
         inline_keyboard = get_youtube_inline_buttons(lang)
