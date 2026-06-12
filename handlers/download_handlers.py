@@ -8,7 +8,7 @@ Media Download Handler
   - ✅ YouTube visitor cookies في HTTP headers (VISITOR_INFO1_LIVE, CONSENT)
   - ✅ Fallback chain أقوى: mweb → android → ios → tv → default (5 محاولات)
   - ✅ تحديث yt-dlp تلقائي عند تشغيل البوت
-  - ✅ أمر /cookies للأدمن عشان يرفع ملف cookies.txt
+  - ✅ أمر /cookies لكل المستخدمين عشان يرفعوا ملف cookies.txt (الأدمن يشوف تفاصيل أكتر)
   - ✅ رسائل خطأ أوضح مع نصائح حقيقية
   - ✅ كشف ffmpeg تلقائي وتعديل التنسيقات حسب التوفر
   - ✅ Logging مفصل عشان نقدر ن debugging
@@ -3985,24 +3985,65 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 # ═══════════════════════════════════════
-# أمر /cookies — للأدمن يرفع ملف cookies.txt
+# أمر /cookies — رفع ملف cookies.txt (كل المستخدمين)
 # ═══════════════════════════════════════
 
 async def cookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /cookies — إدارة ملف cookies.txt (أدمن فقط)"""
+    """أمر /cookies — رفع ملف cookies.txt (كل المستخدمين، الأدمن يشوف تفاصيل أكتر)"""
     from admin import is_admin
     from config import CHAT_ID
     
     user_id = update.effective_user.id
     username = update.effective_user.username if update.effective_user else None
     lang = get_language(user_id)
+    is_user_admin = is_admin(user_id, username) or str(user_id) == str(CHAT_ID)
     
-    # 🔴 أدمن بس
-    if not is_admin(user_id, username) and str(user_id) != str(CHAT_ID):
-        await update.message.reply_text("❌ الأمر ده للأدمن بس." if lang == "ar" else "❌ Admin only command.")
+    # 🔴 حذف الملف — أدمن بس
+    args = " ".join(context.args) if context.args else ""
+    if args.lower() in ("delete", "remove", "مسح", "حذف"):
+        if not is_user_admin:
+            await update.message.reply_text("❌ الأمر ده للأدمن بس." if lang == "ar" else "❌ Admin only command.")
+            return
+        try:
+            if os.path.exists(_COOKIES_FILE):
+                os.remove(_COOKIES_FILE)
+                msg = "✅ تم حذف ملف الكوكيز." if lang == "ar" else "✅ Cookies file deleted."
+                logger.info(f"🍪 Cookies file deleted by admin {user_id}")
+            else:
+                msg = "❌ ملف الكوكيز مش موجود أصلاً." if lang == "ar" else "❌ Cookies file doesn't exist."
+        except Exception as e:
+            msg = f"❌ فشل الحذف: {e}" if lang == "ar" else f"❌ Delete failed: {e}"
+        await update.message.reply_text(msg, parse_mode="HTML")
         return
     
-    # عرض الحالة الحالية
+    # ✅ للمستخدم العادي — رسالة بسيطة
+    if not is_user_admin:
+        if lang == "ar":
+            msg = """🍪 <b>ارفع ملف الكوكيز بتاعك</b>
+
+ابعت ملف cookies.txt من جهازك وهنسخه للبوت عشان نساعد في تحميل الفيديوهات.
+
+💡 <b>إزاي تجيب الملف:</b>
+1️⃣ افتح Chrome على الكمبيوتر
+2️⃣ ثبّت إضافة "Get cookies.txt LOCALLY"
+3️⃣ افتح youtube.com واعمل login
+4️⃣ اضغط على الإضافة واختار "Export"
+5️⃣ ابعت الملف هنا كـ document"""
+        else:
+            msg = """🍪 <b>Upload your cookies file</b>
+
+Send a cookies.txt file from your device and we'll add it to the bot to help with video downloads.
+
+💡 <b>How to get the file:</b>
+1️⃣ Open Chrome on your computer
+2️⃣ Install the "Get cookies.txt LOCALLY" extension
+3️⃣ Open youtube.com and log in
+4️⃣ Click the extension and select "Export"
+5️⃣ Send the file here as a document"""
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+    
+    # 🔴 للأدمن — عرض الحالة الكاملة
     status = _cookies_status()
     
     # 🔴 حالة نظام تدوير الكوكيز التلقائي
@@ -4058,34 +4099,94 @@ async def cookies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📁 أو ارفع الملف يدوياً: <code>{_COOKIES_FILE}</code>"""
     
-    # 🔴 حذف الملف
-    args = " ".join(context.args) if context.args else ""
-    if args.lower() in ("delete", "remove", "مسح", "حذف"):
-        try:
-            if os.path.exists(_COOKIES_FILE):
-                os.remove(_COOKIES_FILE)
-                msg = "✅ تم حذف ملف الكوكيز." if lang == "ar" else "✅ Cookies file deleted."
-                logger.info(f"🍪 Cookies file deleted by admin {user_id}")
-            else:
-                msg = "❌ ملف الكوكيز مش موجود أصلاً." if lang == "ar" else "❌ Cookies file doesn't exist."
-        except Exception as e:
-            msg = f"❌ فشل الحذف: {e}" if lang == "ar" else f"❌ Delete failed: {e}"
-    
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
+def _merge_cookies(existing_content: str, new_content: str) -> str:
+    """دمج كوكيز جديدة مع الملف الموجود — منضيفش كوكيز مكررة (حسب name+domain)"""
+    # 🍪 بنبني dict من الكوكيز الموجودة — المفتاح هو (domain, name)
+    existing_cookies = {}
+    header_lines = []  # سطور الهيدر والتعليقات
+    existing_cookie_lines = []
+    
+    for line in existing_content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            header_lines.append(line)
+            continue
+        parts = stripped.split('\t')
+        if len(parts) >= 7:
+            domain = parts[0]
+            name = parts[5]
+            key = (domain.lower(), name.lower())
+            existing_cookies[key] = line
+            existing_cookie_lines.append(line)
+        else:
+            # سطر مش كوكيز — نسيبه
+            header_lines.append(line)
+    
+    # 🍪 بنفحص الكوكيز الجديدة — منضيف بس اللي مش موجود
+    new_added = 0
+    new_yt_added = 0
+    new_cookie_lines = []
+    
+    for line in new_content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue  # نتجاهل تعليقات الملف الجديد
+        parts = stripped.split('\t')
+        if len(parts) >= 7:
+            domain = parts[0]
+            name = parts[5]
+            key = (domain.lower(), name.lower())
+            if key not in existing_cookies:
+                existing_cookies[key] = line
+                new_cookie_lines.append(line)
+                new_added += 1
+                if 'youtube.com' in domain.lower():
+                    new_yt_added += 1
+    
+    # 🍪 نبني النتيجة: هيدر → كوكيز قديمة → كوكيز جديدة
+    result_lines = []
+    
+    # هيدر Netscape لو مش موجود
+    has_netscape_header = any('# Netscape HTTP Cookie File' in h for h in header_lines)
+    if not has_netscape_header:
+        result_lines.append('# Netscape HTTP Cookie File')
+        result_lines.append('# https://curl.se/docs/http-cookies.html')
+        result_lines.append('# This file was generated automatically! Edit at your own risk.')
+        result_lines.append('')
+    
+    # سطور الهيدر الأصلية (باستثناء Netscape header لو حطينا واحد جديد)
+    for h in header_lines:
+        if '# Netscape HTTP Cookie File' in h:
+            continue
+        if '# https://curl.se/docs/http-cookies.html' in h:
+            continue
+        if '# This file was generated automatically' in h:
+            continue
+        result_lines.append(h)
+    
+    # كوكيز أصلية
+    result_lines.extend(existing_cookie_lines)
+    
+    # كوكيز جديدة
+    result_lines.extend(new_cookie_lines)
+    
+    return '\n'.join(result_lines), new_added, new_yt_added
+
+
 async def handle_cookies_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة رفع ملف cookies.txt — الأدمن يبعت ملف وكوكيز"""
+    """معالجة رفع ملف cookies.txt — كل المستخدمين يقدروا يرفعوا كوكيز"""
     from admin import is_admin
     from config import CHAT_ID
     
     user_id = update.effective_user.id
     username = update.effective_user.username if update.effective_user else None
     lang = get_language(user_id)
+    is_user_admin = is_admin(user_id, username) or str(user_id) == str(CHAT_ID)
     
-    # 🔴 أدمن بس
-    if not is_admin(user_id, username) and str(user_id) != str(CHAT_ID):
-        return  # مش أدمن — نتجاهل بس
+    # ✅ كل المستخدمين يقدروا يرفعوا كوكيز — مفيش قيود أدمن هنا
     
     if not update.message.document:
         return
@@ -4105,39 +4206,98 @@ async def handle_cookies_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         content = bytes(file_bytes).decode('utf-8', errors='ignore')
         
         # 🔴 فحص المحتوى — نتأكد إنه ملف كوكيز حقيقي
-        if '# Netscape HTTP Cookie File' in content or '.youtube.com' in content or 'youtube.com' in content:
-            # ملف كوكيز صحيح
+        is_valid = False
+        has_netscape_header = '# Netscape HTTP Cookie File' in content
+        has_youtube = '.youtube.com' in content or 'youtube.com' in content
+        
+        # لازم يكون فيه هيدر Netscape أو كوكيز YouTube
+        if has_netscape_header or has_youtube:
+            # بنشوف فيه سطور كوكيز فعلية (7 أعمدة مفصولة بـ tab)
+            cookie_lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
+            valid_lines = [l for l in cookie_lines if len(l.split('\t')) >= 7]
+            if valid_lines:
+                is_valid = True
+        
+        if not is_valid:
+            # الملف مش كوكيز صحيح
+            if lang == "ar":
+                await update.message.reply_text("❌ الملف ده مش ملف كوكيز صحيح. لازم يكون Netscape HTTP Cookie File وفيه كوكيز YouTube.")
+            else:
+                await update.message.reply_text("❌ This doesn't look like a valid cookies file. It needs to be a Netscape HTTP Cookie File with YouTube cookies.")
+            return
+        
+        # 🔴 دمج الكوكيز مع الملف الموجود
+        existing_content = ""
+        if os.path.exists(_COOKIES_FILE):
+            try:
+                with open(_COOKIES_FILE, 'r', encoding='utf-8') as f:
+                    existing_content = f.read()
+            except Exception:
+                existing_content = ""
+        
+        if existing_content.strip():
+            # في ملف موجود — ندمج
+            merged_content, new_added, new_yt_added = _merge_cookies(existing_content, content)
+            with open(_COOKIES_FILE, 'w', encoding='utf-8') as f:
+                f.write(merged_content)
+            logger.info(f"🍪 Cookies merged from user {user_id}: {new_added} new cookies ({new_yt_added} YouTube)")
+        else:
+            # مفيش ملف موجود — نكتب مباشرة
             with open(_COOKIES_FILE, 'w', encoding='utf-8') as f:
                 f.write(content)
-            
-            # التحقق
-            new_status = _cookies_status()
-            yt_count = new_status.get('youtube_cookies', 0)
-            
-            logger.info(f"🍪 Cookies file uploaded by admin {user_id}: {yt_count} YouTube cookies")
-            
+            new_added = 0  # مش دمج
+            new_yt_added = 0
+            logger.info(f"🍪 Cookies file created by user {user_id}")
+        
+        # التحقق
+        new_status = _cookies_status()
+        yt_count = new_status.get('youtube_cookies', 0)
+        total_count = new_status.get('total_cookies', 0)
+        
+        # ✅ للمستخدم العادي — رسالة بسيطة
+        if not is_user_admin:
             if lang == "ar":
-                msg = f"""✅ <b>تم رفع ملف الكوكيز بنجاح!</b>
+                msg = "✅ تم رفع ملف الكوكيز بنجاح! شكراً لمساعدتنا 🎬"
+            else:
+                msg = "✅ Cookies uploaded successfully! Thanks for helping 🎬"
+        else:
+            # 🔴 للأدمن — تفاصيل كاملة
+            if lang == "ar":
+                if new_added > 0:
+                    msg = f"""✅ <b>تم دمج الكوكيز بنجاح!</b>
+
+🆕 كوكيز جديدة: {new_added} ({new_yt_added} YouTube)
+📊 إجمالي الكوكيز: {total_count}
+▶️ كوكيز YouTube: {yt_count}
+📁 المحتوى محفوظ في: <code>{_COOKIES_FILE}</code>
+
+🎬 تحميل الفيديوهات من YouTube هيشتغل بشكل أفضل!"""
+                else:
+                    msg = f"""✅ <b>تم رفع ملف الكوكيز بنجاح!</b>
 
 📊 عدد كوكيز YouTube: {yt_count}
 📁 المحتوى محفوظ في: <code>{_COOKIES_FILE}</code>
 
 🎬 دلوقتي تحميل الفيديوهات من YouTube هيشتغل بشكل أفضل!"""
             else:
-                msg = f"""✅ <b>Cookies file uploaded successfully!</b>
+                if new_added > 0:
+                    msg = f"""✅ <b>Cookies merged successfully!</b>
+
+🆕 New cookies: {new_added} ({new_yt_added} YouTube)
+📊 Total cookies: {total_count}
+▶️ YouTube cookies: {yt_count}
+📁 Saved to: <code>{_COOKIES_FILE}</code>
+
+🎬 YouTube downloads should work much better now!"""
+                else:
+                    msg = f"""✅ <b>Cookies file uploaded successfully!</b>
 
 📊 YouTube cookies: {yt_count}
 📁 Saved to: <code>{_COOKIES_FILE}</code>
 
 🎬 YouTube downloads should work much better now!"""
-            
-            await update.message.reply_text(msg, parse_mode="HTML")
-        else:
-            # الملف مش كوكيز
-            if lang == "ar":
-                await update.message.reply_text("❌ الملف ده مش ملف كوكيز صحيح. لازم يكون Netscape HTTP Cookie File وفيه كوكيز YouTube.")
-            else:
-                await update.message.reply_text("❌ This doesn't look like a valid cookies file. It needs to be a Netscape HTTP Cookie File with YouTube cookies.")
+        
+        await update.message.reply_text(msg, parse_mode="HTML")
     
     except asyncio.TimeoutError:
         await update.message.reply_text("❌ انتهى وقت تحميل الملف. جرب تاني." if lang == "ar" else "❌ File download timed out. Try again.")

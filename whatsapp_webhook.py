@@ -3618,6 +3618,8 @@ _COMMAND_TRIGGERS = {
     "/exit": "exit", "exit": "exit", "خروج": "exit", "الغاء": "exit", "إلغاء": "exit",
     # YouTube
     "/youtube": "youtube", "youtube": "youtube", "يوتيوب": "youtube",
+    # Cookies
+    "/cookies": "cookies", "cookies": "cookies", "كوكيز": "cookies",
     # PDF
     "/pdf": "pdf", "pdf": "pdf",
     "/keypoints": "pdf_keypoints",
@@ -3996,6 +3998,7 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
                     {"id": "cmd_news", "title": "📰 أخبار AI", "description": "آخر أخبار الذكاء الاصطناعي"},
                     {"id": "cmd_youtube", "title": "🎬 ملخص يوتيوب", "description": "لخص أي فيديو يوتيوب"},
                     {"id": "cmd_download", "title": "📥 تحميل فيديو", "description": "حمّل من يوتيوب"},
+                    {"id": "cmd_cookies", "title": "🍪 رفع كوكيز", "description": "ارفع ملف كوكيز YouTube"},
                     {"id": "video_search", "title": "🎬 فيديو بالبحث", "description": "ابحث Dailymotion وحمّل فيديو"},
                     {"id": "audio_search", "title": "🎵 صوت بالبحث", "description": "ابحث SoundCloud وحمّل صوت"},
                     {"id": "photo_search", "title": "🖼️ بحث صور", "description": "ابحث عن صور"},
@@ -4792,6 +4795,59 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
     elif command == "youtube":
         await _send_whatsapp_message(wa_id,
             "🎬 *ملخص يوتيوب*\n\nابعتلي رابط فيديو يوتيوب وهلخصلك محتواه!\n\nمثال:\n/youtube https://youtube.com/watch?v=...")
+
+    # ══════════════════════════════════════
+    # COOKIES
+    # ══════════════════════════════════════
+
+    elif command == "cookies":
+        # 🍪 أمر الكوكيز — كل المستخدمين يقدروا يرفعوا كوكيز
+        if is_admin:
+            # الأدمن يشوف التفاصيل الكاملة
+            cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            if os.path.exists(cookies_file):
+                try:
+                    size = os.path.getsize(cookies_file)
+                    with open(cookies_file, 'r') as f:
+                        lines = f.readlines()
+                    cookie_lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
+                    yt_cookies = [l for l in cookie_lines if 'youtube.com' in l.lower()]
+                    msg = (
+                        f"🍪 *حالة ملف الكوكيز*\n\n"
+                        f"📊 الحجم: {size} bytes\n"
+                        f"🔢 عدد الكوكيز: {len(cookie_lines)}\n"
+                        f"▶️ كوكيز YouTube: {len(yt_cookies)}\n\n"
+                        f"✅ الملف موجود وشغال!\n\n"
+                        f"💡 لرفع ملف جديد: ابعت ملف cookies.txt كـ document مع كتابة *cookies* في الرسالة\n"
+                        f"🗑️ لمسح الملف: /cookies delete"
+                    )
+                except Exception as e:
+                    msg = f"🍪 ❌ خطأ في قراءة الملف: {e}"
+            else:
+                msg = (
+                    "🍪 *ملف الكوكيز مش موجود*\n\n"
+                    "⚠️ بدون ملف كوكيز، YouTube ممكن يمنع التحميل.\n\n"
+                    "💡 ابعت ملف cookies.txt كـ document مع كتابة *cookies* في الرسالة\n\n"
+                    "إزاي تجيب الملف:\n"
+                    "1️⃣ افتح Chrome على الكمبيوتر\n"
+                    "2️⃣ ثبّت إضافة Get cookies.txt LOCALLY\n"
+                    "3️⃣ افتح youtube.com واعمل login\n"
+                    "4️⃣ اضغط على الإضافة واختار Export\n"
+                    "5️⃣ ابعت الملف هنا مع كتابة cookies في الرسالة"
+                )
+        else:
+            # المستخدم العادي — رسالة بسيطة
+            msg = (
+                "🍪 *ارفع ملف الكوكيز بتاعك*\n\n"
+                "ابعت ملف cookies.txt من جهازك وهنسخه للبوت عشان نساعد في تحميل الفيديوهات.\n\n"
+                "💡 إزاي تجيب الملف:\n"
+                "1️⃣ افتح Chrome على الكمبيوتر\n"
+                "2️⃣ ثبّت إضافة Get cookies.txt LOCALLY\n"
+                "3️⃣ افتح youtube.com واعمل login\n"
+                "4️⃣ اضغط على الإضافة واختار Export\n"
+                "5️⃣ ابعت الملف هنا كـ document مع كتابة *cookies* في الرسالة"
+            )
+        await _send_whatsapp_message(wa_id, msg)
 
     # ══════════════════════════════════════
     # PDF
@@ -5593,6 +5649,8 @@ async def _handle_incoming_message(message: dict, value: dict):
                 "cmd_study_flash": "cmd_study_flash",
                 # YouTube
                 "cmd_youtube": "youtube",
+                # Cookies
+                "cmd_cookies": "cookies",
                 # PDF
                 "cmd_pdf": "pdf",
                 "cmd_pdf_keypoints": "pdf_keypoints",
@@ -5640,6 +5698,7 @@ async def _handle_incoming_message(message: dict, value: dict):
                 "/video": "video_search_query",
                 "/audio": "audio_search_query",
                 "/photo": "photo_search_query",
+                "/cookies": "cookies",
             }
             for prefix, cmd_name in prefix_commands.items():
                 if content_lower.startswith(prefix + " "):
@@ -5866,6 +5925,112 @@ async def _handle_incoming_message(message: dict, value: dict):
                 except Exception:
                     pass
                 return
+
+        # ═══ Process Document — Cookies file check first ═══
+        # 🍪 لو الملف اسمه cookies أو الرسالة فيها كلمة cookies → نوجهه لـ cookies handler
+        if is_document and document_media_id:
+            is_cookies_doc = False
+            content_lower = (content or "").lower()
+            # فحص الـ caption/الرسالة
+            if 'cookie' in content_lower or 'كوكيز' in content_lower:
+                is_cookies_doc = True
+
+            if is_cookies_doc:
+                try:
+                    # تحميل الملف من WhatsApp
+                    import aiohttp
+                    cookie_file_content = ""
+                    async with aiohttp.ClientSession() as session:
+                        media_url_resp = await session.get(
+                            f"https://graph.facebook.com/v21.0/{document_media_id}",
+                            headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                        )
+                        if media_url_resp.status == 200:
+                            media_data = await media_url_resp.json()
+                            download_url = media_data.get("url", "")
+                            if download_url:
+                                doc_resp = await session.get(
+                                    download_url,
+                                    headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                                )
+                                if doc_resp.status == 200:
+                                    doc_bytes = await doc_resp.read()
+                                    cookie_file_content = doc_bytes.decode('utf-8', errors='ignore')
+
+                    if cookie_file_content:
+                        # 🔴 فحص المحتوى — نتأكد إنه ملف كوكيز حقيقي
+                        has_netscape_header = '# Netscape HTTP Cookie File' in cookie_file_content
+                        has_youtube = '.youtube.com' in cookie_file_content or 'youtube.com' in cookie_file_content
+
+                        is_valid = False
+                        if has_netscape_header or has_youtube:
+                            cookie_lines = [l for l in cookie_file_content.splitlines() if l.strip() and not l.strip().startswith('#')]
+                            valid_lines = [l for l in cookie_lines if len(l.split('\t')) >= 7]
+                            if valid_lines:
+                                is_valid = True
+
+                        if is_valid:
+                            # 🔴 دمج الكوكيز مع الملف الموجود
+                            cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+                            existing_content = ""
+                            if os.path.exists(cookies_path):
+                                try:
+                                    with open(cookies_path, 'r', encoding='utf-8') as f:
+                                        existing_content = f.read()
+                                except Exception:
+                                    existing_content = ""
+
+                            if existing_content.strip():
+                                # في ملف موجود — ندمج
+                                from handlers.download_handlers import _merge_cookies
+                                merged_content, new_added, new_yt_added = _merge_cookies(existing_content, cookie_file_content)
+                                with open(cookies_path, 'w', encoding='utf-8') as f:
+                                    f.write(merged_content)
+                                logger.info(f"🍪 WA Cookies merged from user {wa_id}: {new_added} new cookies ({new_yt_added} YouTube)")
+                            else:
+                                # مفيش ملف موجود — نكتب مباشرة
+                                with open(cookies_path, 'w', encoding='utf-8') as f:
+                                    f.write(cookie_file_content)
+                                new_added = 0
+                                new_yt_added = 0
+                                logger.info(f"🍪 WA Cookies file created by user {wa_id}")
+
+                            # التحقق
+                            total_yt = 0
+                            total_all = 0
+                            try:
+                                with open(cookies_path, 'r') as f:
+                                    all_lines = f.readlines()
+                                total_all = len([l for l in all_lines if l.strip() and not l.strip().startswith('#')])
+                                total_yt = len([l for l in all_lines if 'youtube.com' in l.lower() and l.strip() and not l.strip().startswith('#')])
+                            except Exception:
+                                pass
+
+                            # ✅ للمستخدم العادي — رسالة بسيطة
+                            if not is_admin:
+                                await _send_whatsapp_message(wa_id, "✅ تم رفع ملف الكوكيز بنجاح! شكراً لمساعدتنا 🎬")
+                            else:
+                                # 🔴 للأدمن — تفاصيل كاملة
+                                if new_added > 0:
+                                    await _send_whatsapp_message(wa_id,
+                                        f"✅ *تم دمج الكوكيز بنجاح!*\n\n"
+                                        f"🆕 كوكيز جديدة: {new_added} ({new_yt_added} YouTube)\n"
+                                        f"📊 إجمالي الكوكيز: {total_all}\n"
+                                        f"▶️ كوكيز YouTube: {total_yt}\n\n"
+                                        f"🎬 التحميل هيشتغل بشكل أفضل!")
+                                else:
+                                    await _send_whatsapp_message(wa_id,
+                                        f"✅ *تم رفع ملف الكوكيز بنجاح!*\n\n"
+                                        f"▶️ كوكيز YouTube: {total_yt}\n\n"
+                                        f"🎬 التحميل هيشتغل بشكل أفضل!")
+                        else:
+                            await _send_whatsapp_message(wa_id, "❌ الملف ده مش ملف كوكيز صحيح. لازم يكون Netscape HTTP Cookie File وفيه كوكيز YouTube.")
+                    else:
+                        await _send_whatsapp_message(wa_id, "❌ مش قادر أحمل الملف. جرب تاني!")
+                except Exception as e:
+                    logger.error(f"🍪 WA Cookies document handling error: {e}")
+                    await _send_whatsapp_message(wa_id, f"❌ حصل خطأ في رفع الكوكيز: {e}")
+                return  # 🍪 مهم — منع الملف يروح لـ PDF analysis
 
         # ═══ Process Document (PDF) ═══
         if is_document and document_media_id:
@@ -6678,6 +6843,24 @@ async def _handle_command_with_arg(wa_id: str, cmd_name: str, arg: str, wa_user_
 
         # Actually generate and send the image
         await _generate_and_send_image(wa_id, arg, wa_user_id, contact_name, message_id, is_admin)
+
+    elif cmd_name == "cookies":
+        # 🍪 /cookies delete — أدمن بس
+        if is_admin and arg.lower() in ("delete", "remove", "مسح", "حذف"):
+            cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            try:
+                if os.path.exists(cookies_file):
+                    os.remove(cookies_file)
+                    await _send_whatsapp_message(wa_id, "✅ تم حذف ملف الكوكيز.")
+                    logger.info(f"🍪 WA Cookies file deleted by admin {wa_id}")
+                else:
+                    await _send_whatsapp_message(wa_id, "❌ ملف الكوكيز مش موجود أصلاً.")
+            except Exception as e:
+                await _send_whatsapp_message(wa_id, f"❌ فشل الحذف: {e}")
+        elif not is_admin:
+            await _send_whatsapp_message(wa_id, "❌ هذا الأمر للمطور فقط.")
+        else:
+            await _handle_command(wa_id, "cookies", wa_user_id, contact_name, message_id)
 
     elif cmd_name == "image_edit":
         if not is_admin:

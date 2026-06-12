@@ -479,12 +479,12 @@ def main():
         logger.info("✅ WhatsApp webhook server already running from background thread")
 
         # ═══ تشغيل Cookie Auto-Rotation ═══
-        # 🍪 تدوير كوكيز YouTube تلقائياً كل 1-2 دقيقة
+        # 🍪 تدوير كوكيز YouTube تلقائياً كل 1-2 دقيقة (كوكيز حقيقية فقط — بدون كوكيز وهمية)
         try:
             from cookie_rotator import start_cookie_rotation, get_cookie_rotation_status
             start_cookie_rotation()
             status = get_cookie_rotation_status()
-            logger.info(f"✅ Cookie auto-rotation started — {status['total_cookies']} cookies loaded")
+            logger.info(f"✅ Cookie auto-rotation started (real cookies only) — {status['total_cookies']} cookies loaded")
         except Exception as e:
             logger.warning(f"⚠️ Cookie auto-rotation failed to start: {e}")
 
@@ -513,7 +513,7 @@ def main():
                 BotCommand("video", "فيديو Dailymotion / Dailymotion video search (Premium)"),
                 BotCommand("audio", "صوت SoundCloud / SoundCloud audio search (Premium)"),
                 BotCommand("photo", "بحث صور / Image search (Premium)"),
-                BotCommand("cookies", "إدارة كوكيز YouTube / Manage YouTube cookies (Admin)"),
+                BotCommand("cookies", "رفع كوكيز YouTube / Upload YouTube cookies"),
                 BotCommand("premium", "الاشتراك / Premium status"),
                 BotCommand("subscribe", "اشترك / Subscribe"),
                 BotCommand("unsubscribe", "إلغاء اشتراك / Unsubscribe"),

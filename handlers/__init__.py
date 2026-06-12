@@ -164,14 +164,14 @@ def register_handlers(app):
     app.add_handler(CommandHandler("photo", photo_search_command))
     app.add_handler(CallbackQueryHandler(handle_search_callback, pattern="^(sv|sa|sp)_"))
 
-    # 🍪 أمر الكوكيز (أدمن بس) — عشان يرفع ملف cookies.txt لـ YouTube
+    # 🍪 أمر الكوكيز (كل المستخدمين) — عشان يرفع ملف cookies.txt لـ YouTube
     app.add_handler(CommandHandler("cookies", cookies_command))
 
     # أزرار Inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
     # Message Handlers (order matters!)
-    # 🍪 ملف الكوكيز — لازم يكون قبل handle_document عشان الأدمن يقدر يرفعه
+    # 🍪 ملف الكوكيز — لازم يكون قبل handle_document عشان كل المستخدمين يقدروا يرفعوه
     app.add_handler(MessageHandler(filters.Document.ALL, _handle_any_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
