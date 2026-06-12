@@ -1480,73 +1480,87 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 # ═══ إرسال الملف — فيديو: رفع على السحابة مباشرة | صورة: إرسال مباشر ═══
                 
                 if is_video:
-                    # 🔴 FIX v8: فيديوهات Threads على واتساب → نحاول إرسال مباشر أول، ولو فشل نرفع على السحابة
-                    # WhatsApp Cloud API ممكن يرفض الفيديو → فبنحول الكوديك الأول
-                    # لو الإرسال المباشر فشل → رفع على Supabase + بعت الرابط
+                    # ═══════════════════════════════════════════════════════════
+                    # 🔴 FIX v9: فيديوهات Threads على واتساب
+                    # استراتيجية: تحويل إجباري → إرسال مباشر → رفع سحابة → رابط نصي
+                    # ═══════════════════════════════════════════════════════════
                     
-                    # 🔴 Step 1: تحويل الكوديك لـ H.264+AAC (WhatsApp بيرفض غير كده)
+                    # 🔴 Step 1: تحويل إجباري لـ H.264+AAC+MP4
+                    # WhatsApp Cloud API بيرضى بس H.264+AAC في MP4
+                    # لازم نحول كل مرة مش شرطي عشان ffprobe ممكن يغلط أو الفيديو يكون فاسد
                     try:
                         import subprocess as _sp
-                        import json as _json
-                        probe_result = _sp.run(
-                            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', file_path],
-                            capture_output=True, timeout=15
-                        )
-                        threads_vcodec = None
-                        threads_acodec = None
+                        import multiprocessing
+                        conv_threads = min(multiprocessing.cpu_count(), 4)
+                        converted_path = file_path + "_wa.mp4"
                         
-                        if probe_result.returncode == 0:
-                            try:
-                                probe_data = _json.loads(probe_result.stdout)
-                                for stream in probe_data.get('streams', []):
-                                    if stream.get('codec_type') == 'video':
-                                        threads_vcodec = stream.get('codec_name', '')
-                                    elif stream.get('codec_type') == 'audio':
-                                        threads_acodec = stream.get('codec_name', '')
-                            except Exception:
-                                pass
+                        # أمر تحويل شامل: H.264 baseline + AAC + أبعاد زوجية + faststart
+                        conv_cmd = [
+                            'ffmpeg', '-y', '-i', file_path,
+                            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+                            '-profile:v', 'baseline', '-level', '3.1',
+                            '-pix_fmt', 'yuv420p',
+                            '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                            '-c:a', 'aac', '-b:a', '96k', '-ar', '44100', '-ac', '2',
+                            '-movflags', '+faststart',
+                            '-threads', str(conv_threads),
+                            '-y', converted_path
+                        ]
                         
-                        needs_conversion = False
-                        if threads_vcodec and threads_vcodec not in ("h264", "avc1", "avc", "mpeg4", ""):
-                            needs_conversion = True
-                        if threads_acodec and threads_acodec not in ("aac", "mp3", ""):
-                            needs_conversion = True
-                        if not threads_acodec and threads_vcodec:
-                            needs_conversion = True
+                        logger.info(f"🧵 Threads WA: Force-converting video to H.264+AAC+MP4 for WhatsApp...")
+                        conv_result = _sp.run(conv_cmd, capture_output=True, timeout=120)
                         
-                        if needs_conversion:
-                            import multiprocessing
-                            conv_threads = min(multiprocessing.cpu_count(), 4)
-                            converted_path = file_path + "_h264.mp4"
-                            conv_cmd = [
-                                'ffmpeg', '-i', file_path,
-                                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+                        if conv_result.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 1000:
+                            try: os.remove(file_path)
+                            except: pass
+                            file_path = converted_path
+                            file_size = os.path.getsize(file_path)
+                            size_mb = file_size / (1024 * 1024)
+                            size_str = f"{size_mb:.1f}MB"
+                            logger.info(f"🧵 Threads WA: ✅ H.264 conversion OK! Size: {size_str}")
+                        else:
+                            # التحويل فشل — ممكن الفيديو مفيهوش صوت
+                            conv_stderr = conv_result.stderr.decode()[:300] if conv_result.stderr else "no stderr"
+                            logger.warning(f"🧵 Threads WA: Full conversion failed ({conv_stderr}), trying without audio...")
+                            try: os.remove(converted_path)
+                            except: pass
+                            
+                            # محاولة تانية بدون صوت (بعض فيديوهات Threads مفيهاش صوت)
+                            conv_cmd_noaudio = [
+                                'ffmpeg', '-y', '-i', file_path,
+                                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+                                '-profile:v', 'baseline', '-level', '3.1',
                                 '-pix_fmt', 'yuv420p',
-                                '-c:a', 'aac', '-b:a', '128k',
+                                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                                '-an',
                                 '-movflags', '+faststart',
                                 '-threads', str(conv_threads),
                                 '-y', converted_path
                             ]
-                            conv_result = _sp.run(conv_cmd, capture_output=True, timeout=120)
-                            if conv_result.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 1000:
+                            conv_result2 = _sp.run(conv_cmd_noaudio, capture_output=True, timeout=120)
+                            
+                            if conv_result2.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 1000:
                                 try: os.remove(file_path)
                                 except: pass
                                 file_path = converted_path
                                 file_size = os.path.getsize(file_path)
                                 size_mb = file_size / (1024 * 1024)
                                 size_str = f"{size_mb:.1f}MB"
-                                logger.info(f"🧵 Threads WA: h264 conversion succeeded! New size: {size_str}")
+                                logger.info(f"🧵 Threads WA: ✅ No-audio conversion OK! Size: {size_str}")
                             else:
-                                logger.warning(f"🧵 Threads WA: h264 conversion failed, trying original file")
+                                logger.warning(f"🧵 Threads WA: Both conversions failed, using original file")
                                 try: os.remove(converted_path)
                                 except: pass
                     except Exception as conv_err:
-                        logger.warning(f"🧵 Threads WA: Codec check/conversion error: {conv_err}")
+                        logger.warning(f"🧵 Threads WA: Conversion error: {conv_err}")
                     
                     # 🔴 Step 2: محاولة إرسال مباشر على واتساب
-                    MAX_WHATSAPP_DIRECT_SIZE = 25 * 1024 * 1024  # 25MB
+                    MAX_WHATSAPP_DIRECT_SIZE = 16 * 1024 * 1024  # 16MB — الحد الآمن لواتساب
+                    direct_send_succeeded = False
+                    
                     if file_size <= MAX_WHATSAPP_DIRECT_SIZE:
                         try:
+                            logger.info(f"🧵 Threads WA: Trying direct send ({size_str})...")
                             with open(file_path, 'rb') as vf:
                                 media_response = requests.post(
                                     f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
@@ -1557,62 +1571,102 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                 )
                                 if media_response.status_code == 200:
                                     media_id = media_response.json().get("id")
-                                    await _send_whatsapp_video(wa_id, media_id, caption=f"🧵 {real_title[:200]}\n📥 Threads | {size_str}")
+                                    if media_id:
+                                        await _send_whatsapp_video(wa_id, media_id, caption=f"🧵 {real_title[:200]}\n📥 Threads | {size_str}")
+                                        await feedback.success()
+                                        try: os.remove(file_path)
+                                        except: pass
+                                        direct_send_succeeded = True
+                                        logger.info(f"🧵 Threads WA: ✅ Direct send succeeded!")
+                                    else:
+                                        logger.warning(f"🧵 Threads WA: Upload 200 but no media_id! Response: {media_response.text[:300]}")
+                                else:
+                                    logger.warning(f"🧵 Threads WA: Upload returned {media_response.status_code}: {media_response.text[:500]}")
+                        except Exception as send_err:
+                            logger.warning(f"🧵 Threads WA: Direct send exception: {send_err}")
+                    else:
+                        logger.info(f"🧵 Threads WA: File too large for direct send ({size_str} > 16MB)")
+                    
+                    if direct_send_succeeded:
+                        return
+                    
+                    # 🔴 Step 3: رفع على السحابة (Supabase)
+                    logger.info(f"🧵 Threads WA: Direct send failed, trying Supabase cloud upload...")
+                    
+                    # 🔴 فحص Supabase قبل المحاولة
+                    supabase_available = False
+                    try:
+                        from supabase_storage import _is_configured, _log_config_status
+                        supabase_available = _is_configured()
+                        if supabase_available:
+                            _log_config_status()
+                            logger.info("🧵 Threads WA: ✅ Supabase configured, attempting upload...")
+                        else:
+                            logger.error("🧵 Threads WA: ❌ Supabase NOT configured! SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing")
+                    except Exception as diag_err:
+                        logger.warning(f"🧵 Threads WA: Supabase diagnostic error: {diag_err}")
+                    
+                    if supabase_available:
+                        try:
+                            from supabase_storage import upload_and_get_link
+                            
+                            # تأكد إن الملف لسه موجود
+                            if not os.path.exists(file_path):
+                                logger.error(f"🧵 Threads WA: File disappeared! {file_path}")
+                            else:
+                                logger.info(f"🧵 Threads WA: File exists ({os.path.getsize(file_path)} bytes), uploading to Supabase...")
+                                
+                                if file_size > 100 * 1024 * 1024:
+                                    await _send_whatsapp_message(wa_id, f"☁️ الملف كبير ({size_str})، جاري ضغطه ورفعه على السحابة...")
+                                else:
+                                    await _send_whatsapp_message(wa_id, f"🧵 جاري رفع فيديو Threads على السحابة ({size_str})...")
+                                
+                                cloud_msg = await asyncio.wait_for(
+                                    upload_and_get_link(
+                                        file_path=file_path,
+                                        filename=f"threads_video.mp4",
+                                        content_type="video/mp4",
+                                        platform="whatsapp",
+                                        title=real_title,
+                                        lang="ar",
+                                    ),
+                                    timeout=600
+                                )
+                                
+                                if cloud_msg:
+                                    await _send_whatsapp_message(wa_id, cloud_msg)
                                     await feedback.success()
                                     try: os.remove(file_path)
                                     except: pass
+                                    logger.info(f"🧵 Threads WA: ✅ Supabase upload succeeded!")
                                     return
                                 else:
-                                    logger.warning(f"⚠️ Threads WA: media upload returned {media_response.status_code}: {media_response.text[:500]}")
-                        except Exception as send_err:
-                            logger.warning(f"⚠️ Threads WA video send failed: {send_err}")
-                        
-                        # 🔴 الإرسال المباشر فشل → نحاول Supabase
-                        logger.info(f"🧵 Threads WA: Direct send failed, trying Supabase upload...")
+                                    logger.error(f"🧵 Threads WA: Supabase returned None! File={file_path} Size={size_str}")
+                        except asyncio.TimeoutError:
+                            logger.error(f"🧵 Threads WA: Supabase upload timed out after 600s")
+                        except Exception as supa_err:
+                            logger.error(f"🧵 Threads WA: Supabase upload exception: {supa_err}")
+                    else:
+                        logger.warning(f"🧵 Threads WA: Skipping Supabase (not configured)")
                     
-                    # 🔴 Step 3: رفع على السحابة (لو الملف كبير أو الإرسال المباشر فشل)
+                    # 🔴 Step 4: Fallback أخير — بعت رابط الفيديو الأصلي كرسالة نصية
+                    # ده بيشتغل دايماً حتى لو كل حاجة تانية فشلت
+                    logger.info(f"🧵 Threads WA: All send methods failed, sending original URL as fallback...")
                     try:
-                        from supabase_storage import upload_and_get_link
-                        if file_size > 100 * 1024 * 1024:
-                            await _send_whatsapp_message(wa_id, f"☁️ الملف كبير ({size_str})، جاري ضغطه ورفعه على السحابة...")
-                        else:
-                            await _send_whatsapp_message(wa_id, f"🧵 جاري رفع فيديو Threads على السحابة ({size_str})...")
-                        cloud_msg = await asyncio.wait_for(
-                            upload_and_get_link(
-                                file_path=file_path,
-                                filename=f"threads_video.mp4",
-                                content_type="video/mp4",
-                                platform="whatsapp",
-                                title=real_title,
-                                lang="ar",
-                            ),
-                            timeout=600
+                        fallback_msg = (
+                            f"🧵 {real_title[:200]}\n\n"
+                            f"⚠️ مقدرش أبعت الفيديو مباشرة على واتساب 😔\n\n"
+                            f"🔗 افتح الرابط ده في المتصفح عشان تشوف الفيديو:\n{url}\n\n"
+                            f"📥 Threads | {size_str}"
                         )
-                        if cloud_msg:
-                            await _send_whatsapp_message(wa_id, cloud_msg)
-                            await feedback.success()
-                            try: os.remove(file_path)
-                            except: pass
-                            return
-                        else:
-                            logger.warning("🧵 Threads WA: Supabase upload returned None — checking if Supabase is configured")
-                            # 🔴 DIAGNOSTIC: log Supabase config status
-                            try:
-                                from supabase_storage import _is_configured, _log_config_status
-                                if not _is_configured():
-                                    logger.error("🧵 Threads WA: Supabase is NOT configured! Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY env vars")
-                                else:
-                                    _log_config_status()
-                            except Exception:
-                                pass
-                    except asyncio.TimeoutError:
-                        logger.warning("🧵 Threads WA: Supabase upload timed out")
-                    except Exception as supa_err:
-                        logger.warning(f"🧵 Threads WA: Supabase upload error: {supa_err}")
+                        await _send_whatsapp_message(wa_id, fallback_msg)
+                        await feedback.success()
+                        logger.info(f"🧵 Threads WA: ✅ Fallback URL sent successfully")
+                    except Exception as fb_err:
+                        logger.error(f"🧵 Threads WA: Even fallback failed: {fb_err}")
+                        await _send_whatsapp_message(wa_id, f"❌ فشل إرسال فيديو Threads ({size_str}). جرب تاني!")
+                        await feedback.error()
                     
-                    # كل محاولات الإرسال فشلت
-                    await _send_whatsapp_message(wa_id, f"❌ فشل إرسال فيديو Threads ({size_str}). جرب تاني!")
-                    await feedback.error()
                     try: os.remove(file_path)
                     except: pass
                     return

@@ -768,11 +768,17 @@ async def upload_and_get_link(
         return None
 
     # Get file size
+    original_size = 0
     try:
         original_size = os.path.getsize(file_path)
         original_mb = original_size / (1024 * 1024)
     except Exception:
         original_mb = 0
+    
+    # 🔴 FIX: If file doesn't exist or is empty, can't upload
+    if original_size == 0:
+        logger.error(f"☁️ File is empty or doesn't exist: {file_path}")
+        return None
 
     # 🔴 FIX v3: If file > 50MB (Supabase limit), compress first
     actual_file_path = file_path
