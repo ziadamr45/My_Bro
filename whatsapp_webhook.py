@@ -6708,6 +6708,16 @@ async def _handle_wa_video_search(wa_id: str, query: str, wa_user_id: int,
         
         results = await search_dailymotion(query, max_results=5)
         
+        # ✅ FIX: If Dailymotion fails, fallback to YouTube search
+        if not results:
+            logger.info(f"🎬 Dailymotion search failed for '{query}', trying YouTube as fallback...")
+            await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في YouTube عن: {query}...")
+            try:
+                from youtube_search import search_youtube
+                results = await search_youtube(query, max_results=5)
+            except Exception as yt_err:
+                logger.warning(f"🎬 YouTube fallback also failed: {yt_err}")
+        
         if not results:
             await _send_whatsapp_message(wa_id, "❌ مفيش نتائج. جرب كلمات بحث تانية!")
             return
@@ -6766,12 +6776,26 @@ async def _handle_wa_audio_search(wa_id: str, query: str, wa_user_id: int,
     except Exception as e:
         logger.warning(f"🛡️ Query safety check failed (allowing): {e}")
     
-    await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في Dailymotion عن: {query}...")
+    await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في SoundCloud عن: {query}...")
     
     try:
         from soundcloud_search import search_soundcloud, format_search_results as format_sc_results
         
         results = await search_soundcloud(query, max_results=5)
+        
+        # ✅ FIX: If SoundCloud fails, fallback to YouTube search (audio mode)
+        if not results:
+            logger.info(f"🎵 SoundCloud search failed for '{query}', trying YouTube as fallback...")
+            await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في YouTube عن: {query}...")
+            try:
+                from youtube_search import search_youtube, format_search_results as format_yt_results
+                results = await search_youtube(query, max_results=5)
+                if results:
+                    # Mark results as audio search for proper handling
+                    for r in results:
+                        r["_search_type"] = "audio"
+            except Exception as yt_err:
+                logger.warning(f"🎵 YouTube fallback also failed: {yt_err}")
         
         if not results:
             await _send_whatsapp_message(wa_id, "❌ مفيش نتائج. جرب كلمات بحث تانية!")

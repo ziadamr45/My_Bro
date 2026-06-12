@@ -947,7 +947,8 @@ Summarize in English in an organized way. NEVER use Markdown. Use HTML only: <b>
             return clean_ai_response(result)
 
         # ═══ Fallback 2: Description + Title ═══
-        if description and len(description) > 50:
+        # ✅ FIX: Lowered threshold from 50 to 10 chars — even short descriptions are useful
+        if description and len(description) > 10:
             if language == "ar":
                 prompt = f"""بناءً على عنوان ووصف الفيديو التالي، اكتب ملخص تقريبي لمحتوى الفيديو:
 
@@ -976,6 +977,38 @@ Write an approximate summary in English based on the title and description. NEVE
 🔴 Start with the summary directly. 🔴 Note this is an approximate summary based on the description only."""
 
             result = await call_ai(prompt, max_tokens=1000, user_id=user_id, task_type="summary")
+            return clean_ai_response(result)
+
+        # ═══ Fallback 3: Title-only AI summary ═══
+        # ✅ NEW: Even without transcript/description, we can still give a useful summary
+        # based on the title and channel name — much better than just an error message
+        if title and title != "فيديو YouTube" and title != "YouTube Video":
+            if language == "ar":
+                prompt = f"""بناءً على عنوان الفيديو التالي، اكتب ملخص تقريبي لمحتواه:
+
+🎬 <b>العنوان:</b> {title}
+👤 <b>القناة:</b> {author or "غير معروف"}
+⏱️ <b>المدة:</b> {duration_str or "غير معروف"}
+
+اكتب ملخص تقريبي بالعربية بناءً على العنوان. ماتستخدمش Markdown أبداً. استخدم HTML فقط.
+
+🔴 ابدأ بالملخص مباشرة.
+🔴 وضّح إن ده ملخص تقريبي بناءً على العنوان فقط ومش محتوى الفيديو الكامل.
+🔴 لو تقدر تستنتج محتوى الفيديو من العنوان، اعمل كده."""
+            else:
+                prompt = f"""Based on the video title below, write an approximate summary of its content:
+
+🎬 <b>Title:</b> {title}
+👤 <b>Channel:</b> {author or "Unknown"}
+⏱️ <b>Duration:</b> {duration_str or "Unknown"}
+
+Write an approximate summary in English based on the title. NEVER use Markdown. Use HTML only.
+
+🔴 Start with the summary directly.
+🔴 Note this is an approximate summary based on the title only, not the full video content.
+🔴 If you can infer the video content from the title, do so."""
+
+            result = await call_ai(prompt, max_tokens=800, user_id=user_id, task_type="summary")
             return clean_ai_response(result)
 
         # ═══ Last Resort: Basic Info ═══
