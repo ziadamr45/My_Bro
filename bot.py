@@ -400,6 +400,19 @@ def main():
     except Exception as e:
         logger.warning(f"Memory database init error: {e}")
 
+    # Initialize rate limiter with admin IDs
+    try:
+        from rate_limiter import rate_limiter
+        from admin import ADMIN_USER_IDS
+        rate_limiter.set_admin_ids(ADMIN_USER_IDS)
+        logger.info("✅ Rate limiter initialized with admin IDs")
+    except Exception as e:
+        logger.warning(f"Rate limiter init error: {e}")
+
+    # Run database migrations
+    from migrate import run_migrations
+    run_migrations()
+
     # 🔴 FIX: ابدأ الـ WhatsApp Webhook Server الأول عشان الـ healthcheck يشتغل
     # حتى لو البوت واجه مشكلة 409 Conflict، السيرفر لازم يكون شغال
     _webhook_runner = None

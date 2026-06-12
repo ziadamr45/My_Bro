@@ -231,6 +231,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text.strip():
         return
 
+    # Rate limit check for messages
+    from rate_limiter import rate_limiter
+    if rate_limiter.is_rate_limited(user_id, "message"):
+        await update.message.reply_text("⚠️ أنت بتبعت رسائل كتير أوي، استنى شوية" if lang == "ar" else "⚠️ Too many messages. Please wait a moment")
+        return
+
     if await _is_duplicate_user_message(user_id, user_text):
         return
 

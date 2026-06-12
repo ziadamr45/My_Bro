@@ -132,6 +132,12 @@ async def webhook_receiver(request: web.Request):
                     messages = value.get("messages", [])
                     if messages:
                         for message in messages:
+                            # Rate limit check — skip message if user is rate limited
+                            from rate_limiter import rate_limiter
+                            wa_id = message.get("from", "")
+                            if wa_id and rate_limiter.is_rate_limited(wa_id, "message"):
+                                logger.warning(f"⚠️ Rate limited WhatsApp user: {wa_id}")
+                                continue  # Skip this message but still return 200
                             asyncio.create_task(_handle_incoming_message(message, value))
 
                     statuses = value.get("statuses", [])

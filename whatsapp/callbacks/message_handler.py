@@ -971,6 +971,12 @@ async def _handle_incoming_message(message: dict, value: dict):
                     return
 
         # ═══ Route to AI Engine with Thinking Feedback ═══
+        # Rate limit check for AI chat actions
+        from rate_limiter import rate_limiter
+        if rate_limiter.is_rate_limited(wa_user_id, "ai_chat"):
+            await _send_whatsapp_message(wa_id, "⚠️ أنت بتبعت رسائل كتير أوي، استنى شوية وجرّب تاني")
+            return
+
         logger.info(f"🤖 Routing WA message to AI: {content[:80]}")
 
         await _send_ai_response(wa_id, content, wa_user_id, contact_name, message_id, context_type="general")
