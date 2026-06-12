@@ -3632,10 +3632,22 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
 
     if command == "start":
         # Welcome message with FULL category list like Telegram keyboard
+        # 🔴 FIX v3: كالتليجرام بالظبط — لو المستخدم جديد ومش مشترك، نسأله هل عايز يشترك في الأخبار
+        
+        from memory import is_new_user, is_subscribed, get_language
+        user_lang = get_language(wa_user_id)
+        user_is_new = is_new_user(wa_user_id)
+        user_subscribed = is_subscribed(wa_user_id)
+        
         # Send welcome text first
-        await _send_whatsapp_message(wa_id,
-            "أهلاً بيك! 🤖 أنا *My Bro* — مساعدك الذكي الشخصي\n\n"
-            "ممكن أساعدك في حاجات كتير!\nاختار من القائمة أو ابعت أي رسالة")
+        if user_lang == "en":
+            await _send_whatsapp_message(wa_id,
+                "Welcome! 🤖 I'm *My Bro* — your personal AI assistant\n\n"
+                "I can help you with many things!\nChoose from the menu or just type anything")
+        else:
+            await _send_whatsapp_message(wa_id,
+                "أهلاً بيك! 🤖 أنا *My Bro* — مساعدك الذكي الشخصي\n\n"
+                "ممكن أساعدك في حاجات كتير!\nاختار من القائمة أو ابعت أي رسالة")
 
         # Then send interactive list with all categories
         admin_row = []
@@ -3644,47 +3656,82 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
 
         await _send_interactive_list(
             wa_id,
-            body_text="اختار من الميزات:",
-            button_text="📋 الميزات",
+            body_text="اختار من الميزات:" if user_lang != "en" else "Choose a feature:",
+            button_text="📋 الميزات" if user_lang != "en" else "📋 Features",
             sections=[{
-                "title": "🤖 الميزات الرئيسية",
+                "title": "🤖 الميزات الرئيسية" if user_lang != "en" else "🤖 Main Features",
                 "rows": [
-                    {"id": "cmd_chat", "title": "🤖 المحادثة", "description": "تحدث مع AI"},
-                    {"id": "cmd_news", "title": "📰 الأخبار", "description": "أخبار AI لحظة بلحظة"},
-                    {"id": "cmd_download", "title": "📥 تحميل فيديو", "description": "تحميل من يوتيوب وتيك توك"},
-                    {"id": "video_search", "title": "🎬 فيديو بالبحث", "description": "ابحث Dailymotion وحمّل فيديو"},
-                    {"id": "audio_search", "title": "🎵 صوت بالبحث", "description": "ابحث SoundCloud وحمّل صوت"},
-                    {"id": "photo_search", "title": "🖼️ بحث صور", "description": "ابحث عن صور"},
-                    {"id": "cmd_search", "title": "🔍 بحث الويب", "description": "ابحث في الإنترنت"},
+                    {"id": "cmd_chat", "title": "🤖 المحادثة" if user_lang != "en" else "🤖 Chat", "description": "تحدث مع AI" if user_lang != "en" else "Talk with AI"},
+                    {"id": "cmd_news", "title": "📰 الأخبار" if user_lang != "en" else "📰 News", "description": "أخبار AI لحظة بلحظة" if user_lang != "en" else "Real-time AI news"},
+                    {"id": "cmd_download", "title": "📥 تحميل فيديو" if user_lang != "en" else "📥 Download", "description": "تحميل من يوتيوب وتيك توك" if user_lang != "en" else "Download from YouTube & TikTok"},
+                    {"id": "video_search", "title": "🎬 فيديو بالبحث" if user_lang != "en" else "🎬 Video Search", "description": "ابحث Dailymotion وحمّل فيديو" if user_lang != "en" else "Search Dailymotion & download"},
+                    {"id": "audio_search", "title": "🎵 صوت بالبحث" if user_lang != "en" else "🎵 Audio Search", "description": "ابحث SoundCloud وحمّل صوت" if user_lang != "en" else "Search SoundCloud & download"},
+                    {"id": "photo_search", "title": "🖼️ بحث صور" if user_lang != "en" else "🖼️ Photo Search", "description": "ابحث عن صور" if user_lang != "en" else "Search for images"},
+                    {"id": "cmd_search", "title": "🔍 بحث الويب" if user_lang != "en" else "🔍 Web Search", "description": "ابحث في الإنترنت" if user_lang != "en" else "Search the internet"},
                 ],
             }, {
-                "title": "📚 التعلم والدراسة",
+                "title": "📚 التعلم والدراسة" if user_lang != "en" else "📚 Learning & Study",
                 "rows": [
-                    {"id": "cmd_study", "title": "📚 وضع الدراسة", "description": "ادرس واختبر نفسك"},
-                    {"id": "cmd_memory", "title": "🧠 ذاكرتي", "description": "عرض وإدارة الذاكرة"},
+                    {"id": "cmd_study", "title": "📚 وضع الدراسة" if user_lang != "en" else "📚 Study Mode", "description": "ادرس واختبر نفسك" if user_lang != "en" else "Study and test yourself"},
+                    {"id": "cmd_memory", "title": "🧠 ذاكرتي" if user_lang != "en" else "🧠 My Memory", "description": "عرض وإدارة الذاكرة" if user_lang != "en" else "View & manage memory"},
                 ],
             }, {
-                "title": "🎨 الوسائط والصور ⭐",
+                "title": "🎨 الوسائط والصور ⭐" if user_lang != "en" else "🎨 Media & Images ⭐",
                 "rows": [
-                    {"id": "cmd_image_gen", "title": "🎨 إنشاء صورة", "description": "Premium — صور من وصف"},
-                    {"id": "cmd_image_edit", "title": "🖌️ تعديل صورة", "description": "Premium — عدّل صورة بالوصف"},
+                    {"id": "cmd_image_gen", "title": "🎨 إنشاء صورة" if user_lang != "en" else "🎨 Generate Image", "description": "Premium — صور من وصف" if user_lang != "en" else "Premium — images from description"},
+                    {"id": "cmd_image_edit", "title": "🖌️ تعديل صورة" if user_lang != "en" else "🖌️ Edit Image", "description": "Premium — عدّل صورة بالوصف" if user_lang != "en" else "Premium — edit image with text"},
                 ],
             }, {
-                "title": "📄 المستندات واليوتيوب",
+                "title": "📄 المستندات واليوتيوب" if user_lang != "en" else "📄 Documents & YouTube",
                 "rows": [
-                    {"id": "cmd_youtube", "title": "📺 ملخص يوتيوب", "description": "ملخص فيديو يوتيوب"},
-                    {"id": "cmd_pdf", "title": "📄 تحليل PDF", "description": "ابعت PDF واسأل عنه"},
+                    {"id": "cmd_youtube", "title": "📺 ملخص يوتيوب" if user_lang != "en" else "📺 YouTube Summary", "description": "ملخص فيديو يوتيوب" if user_lang != "en" else "Summarize YouTube video"},
+                    {"id": "cmd_pdf", "title": "📄 تحليل PDF" if user_lang != "en" else "📄 PDF Analysis", "description": "ابعت PDF واسأل عنه" if user_lang != "en" else "Send PDF and ask about it"},
                 ],
             }, {
-                "title": "⚙️ الإعدادات",
+                "title": "⚙️ الإعدادات" if user_lang != "en" else "⚙️ Settings",
                 "rows": [
-                    {"id": "cmd_settings", "title": "⚙️ الإعدادات", "description": "تغيير اللغة والإشعارات"},
-                    {"id": "cmd_plan", "title": "📋 الخطة وحدودي", "description": "عرض خطتك واستخدامك"},
+                    {"id": "cmd_settings", "title": "⚙️ الإعدادات" if user_lang != "en" else "⚙️ Settings", "description": "تغيير اللغة والإشعارات" if user_lang != "en" else "Change language & notifications"},
+                    {"id": "cmd_plan", "title": "📋 الخطة وحدودي" if user_lang != "en" else "📋 Plan & Limits", "description": "عرض خطتك واستخدامك" if user_lang != "en" else "View your plan & usage"},
                 ] + admin_row,
             }],
             header_text="🤖 My Bro",
-            footer_text="v9.20 — مساعدك الذكي",
+            footer_text="v9.20 — مساعدك الذكي" if user_lang != "en" else "v9.20 — Your AI Assistant",
         )
+        
+        # 🔴 FIX v3: زي التليجرام بالظبط — لو المستخدم جديد ومش مشترك، نبعتله سؤال الاشتراك
+        if user_is_new and not user_subscribed:
+            import asyncio as _aio
+            await _aio.sleep(1.5)  # انتظر شوية عشان الرسالة اللي فاتت توصل الأول
+            if user_lang == "en":
+                await _send_interactive_buttons(
+                    wa_id,
+                    body_text="📬 *Subscribe to Daily News!*\n━━━━━━━━━━━━━━━━━\n\n"
+                              "I'll send you the most important AI news every day at 12:00 PM Cairo time 🌅\n\n"
+                              "✅ Latest AI news from global sources\n"
+                              "✅ Clear and simple summaries\n"
+                              "✅ Completely free\n\n"
+                              "👇 Choose below!",
+                    buttons=[
+                        {"id": "cmd_subscribe_confirm", "title": "✅ Subscribe"},
+                        {"id": "cmd_skip_subscribe", "title": "No Thanks"},
+                    ],
+                    header_text="📬 Daily News",
+                )
+            else:
+                await _send_interactive_buttons(
+                    wa_id,
+                    body_text="📬 *اشترك في الأخبار اليومية!*\n━━━━━━━━━━━━━━━━━\n\n"
+                              "هابعتلك أهم أخبار الذكاء الاصطناعي كل يوم الساعة 12 الظهر بتوقيت القاهرة 🌅\n\n"
+                              "✅ آخر أخبار AI من مصادر عالمية\n"
+                              "✅ ملخص بالعربية مفهوم وبسيط\n"
+                              "✅ مجاني تماماً\n\n"
+                              "👇 اختار من تحت!",
+                    buttons=[
+                        {"id": "cmd_subscribe_confirm", "title": "✅ اشترك"},
+                        {"id": "cmd_skip_subscribe", "title": "لا شكراً"},
+                    ],
+                    header_text="📬 أخبار يومية",
+                )
 
     # ══════════════════════════════════════
     # HELP / COMMANDS
@@ -3920,6 +3967,15 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
             await _send_whatsapp_message(wa_id, "✅ تم الاشتراك بنجاح! 🎉\n\n📬 هنبعتلك أخبار AI كل يوم الساعة 12 الظهر (توقيت القاهرة).\n\n⏰ لو عايز تغير الوقت ابعت بصيغة HH:MM\nمثال: 14:30\n\nلو عايز تلغي الاشتراك ابعت: إلغاء")
         except Exception:
             await _send_whatsapp_message(wa_id, "✅ تم الاشتراك بنجاح! 🎉")
+
+    elif command == "skip_subscribe":
+        # 🔴 FIX v3: المستخدم ضغط "لا شكراً" على سؤال الاشتراك — نحترم اختياره بس نقوله ممكن يشترك بعدين
+        from memory import get_language
+        skip_lang = get_language(wa_user_id)
+        if skip_lang == "en":
+            await _send_whatsapp_message(wa_id, "👍 No problem! You can subscribe anytime by sending: subscribe")
+        else:
+            await _send_whatsapp_message(wa_id, "👍 مفيش مشكلة! ممكن تشترك أي وقت لو ابعتت: اشترك")
 
     elif command == "unsubscribe_confirm":
         try:
@@ -5233,6 +5289,7 @@ async def _handle_incoming_message(message: dict, value: dict):
                 # Settings
                 "cmd_subscribe": "subscribe",
                 "cmd_subscribe_confirm": "subscribe_confirm",
+                "cmd_skip_subscribe": "skip_subscribe",
                 "cmd_unsubscribe_confirm": "unsubscribe_confirm",
                 "cmd_language": "language",
                 "cmd_lang_ar": "lang_ar",
