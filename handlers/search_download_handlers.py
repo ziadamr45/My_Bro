@@ -25,6 +25,7 @@ import time
 import hashlib
 import tempfile
 
+from i18n import t
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -89,7 +90,7 @@ async def video_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
     increment_command_count(user_id)
     
     if not check_limit(user_id, "image_gen")["allowed"]:
-        feature_name = "🎬 فيديو بالبحث / Video Search"
+        feature_name = t("feature.video_searches", lang)
         await update.message.reply_text(
             premium_required_message(feature_name, lang),
             parse_mode="HTML",
@@ -155,7 +156,7 @@ async def video_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
         
         keyboard = []
         for i, r in enumerate(results):
-            title = r.get('title', 'بدون عنوان')[:40]
+            title = r.get('title', t("search.untitled", lang))[:40]
             duration = r.get('duration', '')
             channel = r.get('channel', '')[:15]
             views = r.get('views', '')
@@ -205,7 +206,7 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
     increment_command_count(user_id)
     
     if not check_limit(user_id, "image_gen")["allowed"]:
-        feature_name = "🎵 صوت بالبحث / Audio Search"
+        feature_name = t("feature.audio_searches", lang)
         await update.message.reply_text(
             premium_required_message(feature_name, lang),
             parse_mode="HTML",
@@ -295,7 +296,7 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
         
         keyboard = []
         for i, r in enumerate(results):
-            title = r.get('title', 'بدون عنوان')[:40]
+            title = r.get('title', t("search.untitled", lang))[:40]
             duration = r.get('duration', '')
             
             btn_text = f"{i+1}. {title}"
@@ -335,7 +336,7 @@ async def photo_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
     increment_command_count(user_id)
     
     if not check_limit(user_id, "image_gen")["allowed"]:
-        feature_name = "🖼️ بحث صور / Image Search"
+        feature_name = t("feature.photo_searches", lang)
         await update.message.reply_text(
             premium_required_message(feature_name, lang),
             parse_mode="HTML",

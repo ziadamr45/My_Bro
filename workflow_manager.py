@@ -20,6 +20,8 @@ import logging
 import time
 from typing import Optional, Dict, Any
 
+from i18n import t
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,22 +35,36 @@ _workflow_cache: Dict[int, Dict[str, Any]] = {}
 # مدة صلاحية الـ Workflow (30 دقيقة — لو المستخدم ساكت أكتر من كده يتمسح)
 WORKFLOW_TTL = 30 * 60  # 30 minutes
 
-# أنواع Workflow مع خطواتها
-WORKFLOW_STEPS = {
-    "study_mode": {
-        "waiting_for_subject": "اكتب المادة أو الموضوع الذي تريد دراسته",
-        "active": "أنت الآن في وضع الدراسة — اكتب سؤالك أو الموضوع",
-    },
-    "pdf_question": {
-        "waiting_for_question": "اكتب سؤالك عن الملف",
-    },
-    "image_edit": {
-        "waiting_for_description": "اكتب الوصف اللي عايز تعدّل بيه الصورة",
-    },
-    "search_query": {
-        "waiting_for_query": "اكتب كلمة البحث",
-    },
-}
+
+# أنواع Workflow مع خطواتها (يدعم العربية والإنجليزية)
+def get_workflow_steps(lang: str = "ar") -> Dict[str, Dict[str, str]]:
+    """إرجاع خطوات الـ Workflow مترجمة حسب اللغة
+    
+    Args:
+        lang: اللغة ("ar" أو "en") — الافتراضي "ar"
+    
+    Returns:
+        Dict mapping workflow names to their steps with translated messages
+    """
+    return {
+        "study_mode": {
+            "waiting_for_subject": t("workflow.study_waiting", lang),
+            "active": t("workflow.study_active", lang),
+        },
+        "pdf_question": {
+            "waiting_for_question": t("workflow.pdf_waiting", lang),
+        },
+        "image_edit": {
+            "waiting_for_description": t("workflow.image_edit_waiting", lang),
+        },
+        "search_query": {
+            "waiting_for_query": t("workflow.search_waiting", lang),
+        },
+    }
+
+
+# Backward-compatible constant: returns Arabic by default
+WORKFLOW_STEPS = get_workflow_steps("ar")
 
 
 def set_workflow(user_id: int, workflow_name: str, step: str = None, data: Dict = None):

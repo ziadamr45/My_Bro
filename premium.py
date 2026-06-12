@@ -11,6 +11,8 @@ import time as _time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 
+from i18n import t
+
 logger = logging.getLogger(__name__)
 
 # Timezone
@@ -362,7 +364,7 @@ def is_premium(user_id: int) -> bool:
     return plan in ("premium", "premium_plus")
 
 
-def get_premium_info(user_id: int) -> dict:
+def get_premium_info(user_id: int, lang: str = "ar") -> dict:
     """الحصول على معلومات الاشتراك Premium كاملة
     
     Returns: {
@@ -409,18 +411,18 @@ def get_premium_info(user_id: int) -> dict:
                 remaining = expires_dt - now
                 result["remaining_days"] = max(0, remaining.days)
                 if remaining.days > 0:
-                    result["expires_display"] = f"{remaining.days} يوم (ينتهي {expires_dt.strftime('%Y-%m-%d')})"
+                    result["expires_display"] = t("premium.expires_in_days", lang, days=remaining.days, date=expires_dt.strftime('%Y-%m-%d'))
                 else:
                     hours_left = max(0, remaining.seconds // 3600)
                     if hours_left > 0:
-                        result["expires_display"] = f"أقل من يوم ({hours_left} ساعة — ينتهي {expires_dt.strftime('%Y-%m-%d %H:%M')})"
+                        result["expires_display"] = t("premium.less_than_day", lang, hours=hours_left, date=expires_dt.strftime('%Y-%m-%d %H:%M'))
                     else:
-                        result["expires_display"] = f"بينتهي قريب ({expires_dt.strftime('%Y-%m-%d')})"
+                        result["expires_display"] = t("premium.expiring_soon", lang, date=expires_dt.strftime('%Y-%m-%d'))
             except Exception:
                 result["expires_display"] = result["premium_expires"][:10] if result["premium_expires"] else "—"
         else:
             result["remaining_days"] = 0  # 0 = مدى الحياة
-            result["expires_display"] = "مدى الحياة 🔓"
+            result["expires_display"] = t("premium.lifetime", lang)
     
     return result
 
@@ -492,8 +494,9 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
         platform: المنصة ("telegram" أو "whatsapp") — ضروري عشان _ensure_user_in_db
                   تعرف تضبط الـ platform صح لو المستخدم جديد
     """
-    from memory import _ensure_user_in_db, get_user, get_interests, get_favorite_companies
+    from memory import _ensure_user_in_db, get_user, get_interests, get_favorite_companies, get_language
     _ensure_user_in_db(user_id, platform=platform)
+    lang = get_language(user_id)
     
     result = {
         "user_id": user_id,
@@ -522,7 +525,7 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
         result["chat_count"] = user_data.get("chat_count", 0)
         
         # ═══ معلومات الخطة الحالية ═══
-        premium_info = get_premium_info(user_id)
+        premium_info = get_premium_info(user_id, lang=lang)
         result["plan"] = premium_info["plan"]
         result["is_premium"] = premium_info["is_premium"]
         result["premium_since"] = premium_info["premium_since"]
@@ -541,15 +544,15 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
                 if days_on_plan > 30:
                     months = days_on_plan // 30
                     remaining_days = days_on_plan % 30
-                    result["time_on_current_plan"] = f"{months} شهر و {remaining_days} يوم"
+                    result["time_on_current_plan"] = t("premium.months_and_days", lang, months=months, days=remaining_days)
                 else:
-                    result["time_on_current_plan"] = f"{days_on_plan} يوم"
+                    result["time_on_current_plan"] = t("premium.days_only", lang, days=days_on_plan)
             except Exception:
                 result["days_on_current_plan"] = 0
-                result["time_on_current_plan"] = "مش محدد"
+                result["time_on_current_plan"] = t("premium.not_specified", lang)
         else:
             result["days_on_current_plan"] = 0
-            result["time_on_current_plan"] = "مش محدد"
+            result["time_on_current_plan"] = t("premium.not_specified", lang)
         
         # ═══ كم مدة على البوت ═══
         if result["created_at"]:
@@ -562,19 +565,19 @@ def get_user_stats(user_id: int, platform: str = "telegram") -> dict:
                     years = days_on_bot // 365
                     remaining = days_on_bot % 365
                     months = remaining // 30
-                    result["time_on_bot"] = f"{years} سنة و {months} شهر"
+                    result["time_on_bot"] = t("premium.years_and_months", lang, years=years, months=months)
                 elif days_on_bot >= 30:
                     months = days_on_bot // 30
                     remaining = days_on_bot % 30
-                    result["time_on_bot"] = f"{months} شهر و {remaining} يوم"
+                    result["time_on_bot"] = t("premium.months_and_days", lang, months=months, days=remaining)
                 else:
-                    result["time_on_bot"] = f"{days_on_bot} يوم"
+                    result["time_on_bot"] = t("premium.days_only", lang, days=days_on_bot)
             except Exception:
                 result["days_on_bot"] = 0
-                result["time_on_bot"] = "مش محدد"
+                result["time_on_bot"] = t("premium.not_specified", lang)
         else:
             result["days_on_bot"] = 0
-            result["time_on_bot"] = "مش محدد"
+            result["time_on_bot"] = t("premium.not_specified", lang)
         
         # ═══ تاريخ Premium ═══
         history = get_premium_history(user_id, limit=50)

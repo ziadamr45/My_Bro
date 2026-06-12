@@ -24,16 +24,15 @@ from config import (
 
 def _get_current_date_context(lang: str = "ar") -> str:
     """تجهيز سياق التاريخ الحالي للـ system prompt"""
+    from i18n import format_date_ar, format_date_en, t
     now = datetime.now()
-    days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
-    months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
 
     if lang == "ar":
-        date_str = f"{days_ar[now.weekday()]}, {now.day} {months_ar[now.month]} {now.year}"
-        return f"التاريخ الحالي: {date_str} — الساعة {now.strftime('%H:%M')}. أنت متصل بالوقت الحقيقي وعارف التاريخ الفعلي. ماتقولش إن معلوماتك قديمة أو إنك متوقف عند تاريخ معين."
+        date_str = format_date_ar(now)
+        return t("ai.date_context", lang, date=date_str, time=now.strftime('%H:%M'))
     else:
-        date_str = now.strftime("%A, %B %d, %Y")
-        return f"Current date: {date_str} — Time: {now.strftime('%H:%M')}. You are connected to real-time and know the actual date. Never say your knowledge is outdated or stopped at a certain date."
+        date_str = format_date_en(now)
+        return t("ai.date_context", lang, date=date_str, time=now.strftime('%H:%M'))
 
 logger = logging.getLogger(__name__)
 

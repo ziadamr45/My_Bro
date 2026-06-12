@@ -10,6 +10,7 @@ v10.0 FIXES:
 import asyncio
 import logging
 
+from i18n import t
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -282,7 +283,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Premium check
                 if not check_limit(user_id, "study_mode")["allowed"]:
                     await update.message.reply_text(
-                        premium_required_message("📚 وضع الدراسة / Study Mode", lang),
+                        premium_required_message(t("feature.study_mode", lang), lang),
                         parse_mode="HTML",
                         reply_markup=get_premium_keyboard(lang, user_id=user_id)
                     )
@@ -834,7 +835,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 🔴 FIX: وضع الدراسة — نحفظ الـ workflow عشان الرسالة الجاية تتوجه صح
             if not check_limit(user_id, "study_mode")["allowed"]:
                 await update.message.reply_text(
-                    premium_required_message("📚 وضع الدراسة / Study Mode", lang),
+                    premium_required_message(t("feature.study_mode", lang), lang),
                     parse_mode="HTML",
                     reply_markup=get_premium_keyboard(lang, user_id=user_id)
                 )
@@ -963,7 +964,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if is_social or is_direct_media:
             if not check_limit(user_id, "image_gen")["allowed"]:
-                feature_name = "📥 تحميل وسائط / Media Download"
+                feature_name = t("feature.downloads", lang)
                 await update.message.reply_text(
                     premium_required_message(feature_name, lang),
                     parse_mode="HTML",

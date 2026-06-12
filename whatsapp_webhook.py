@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 
 from aiohttp import web
 
+from i18n import t
+
 from content_safety import (
     check_query_safety,
     check_search_results_safety,
@@ -3669,50 +3671,50 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
         # Then send interactive list with all categories
         admin_row = []
         if is_admin:
-            admin_row = [{"id": "cmd_admin", "title": "👑 أدمن", "description": "لوحة تحكم الأدمن"}]
+            admin_row = [{"id": "cmd_admin", "title": t("wa.menu_admin", user_lang), "description": t("wa.menu_admin_desc", user_lang)}]
 
         await _send_interactive_list(
             wa_id,
-            body_text="اختار من الميزات:" if user_lang != "en" else "Choose a feature:",
-            button_text="📋 الميزات" if user_lang != "en" else "📋 Features",
+            body_text=t("wa.menu_choose_feature", user_lang),
+            button_text=t("wa.menu_features", user_lang),
             sections=[{
-                "title": "🤖 الميزات الرئيسية" if user_lang != "en" else "🤖 Main Features",
+                "title": t("wa.menu_main_features", user_lang),
                 "rows": [
-                    {"id": "cmd_chat", "title": "🤖 المحادثة" if user_lang != "en" else "🤖 Chat", "description": "تحدث مع AI" if user_lang != "en" else "Talk with AI"},
-                    {"id": "cmd_news", "title": "📰 الأخبار" if user_lang != "en" else "📰 News", "description": "أخبار AI لحظة بلحظة" if user_lang != "en" else "Real-time AI news"},
-                    {"id": "cmd_download", "title": "📥 تحميل فيديو" if user_lang != "en" else "📥 Download", "description": "تحميل من يوتيوب وتيك توك" if user_lang != "en" else "Download from YouTube & TikTok"},
-                    {"id": "video_search", "title": "🎬 فيديو بالبحث" if user_lang != "en" else "🎬 Video Search", "description": "ابحث Dailymotion وحمّل فيديو" if user_lang != "en" else "Search Dailymotion & download"},
-                    {"id": "audio_search", "title": "🎵 صوت بالبحث" if user_lang != "en" else "🎵 Audio Search", "description": "ابحث SoundCloud وحمّل صوت" if user_lang != "en" else "Search SoundCloud & download"},
-                    {"id": "photo_search", "title": "🖼️ بحث صور" if user_lang != "en" else "🖼️ Photo Search", "description": "ابحث عن صور" if user_lang != "en" else "Search for images"},
-                    {"id": "cmd_search", "title": "🔍 بحث الويب" if user_lang != "en" else "🔍 Web Search", "description": "ابحث في الإنترنت" if user_lang != "en" else "Search the internet"},
+                    {"id": "cmd_chat", "title": t("wa.menu_chat", user_lang), "description": t("wa.menu_chat_desc", user_lang)},
+                    {"id": "cmd_news", "title": t("wa.menu_news", user_lang), "description": t("wa.menu_news_desc", user_lang)},
+                    {"id": "cmd_download", "title": t("wa.menu_download", user_lang), "description": t("wa.menu_download_desc", user_lang)},
+                    {"id": "video_search", "title": t("wa.menu_video_search", user_lang), "description": t("wa.menu_video_search_desc", user_lang)},
+                    {"id": "audio_search", "title": t("wa.menu_audio_search", user_lang), "description": t("wa.menu_audio_search_desc", user_lang)},
+                    {"id": "photo_search", "title": t("wa.menu_photo_search", user_lang), "description": t("wa.menu_photo_search_desc", user_lang)},
+                    {"id": "cmd_search", "title": t("wa.menu_web_search", user_lang), "description": t("wa.menu_web_search_desc", user_lang)},
                 ],
             }, {
-                "title": "📚 التعلم والدراسة" if user_lang != "en" else "📚 Learning & Study",
+                "title": t("wa.menu_learning", user_lang),
                 "rows": [
-                    {"id": "cmd_study", "title": "📚 وضع الدراسة" if user_lang != "en" else "📚 Study Mode", "description": "ادرس واختبر نفسك" if user_lang != "en" else "Study and test yourself"},
-                    {"id": "cmd_memory", "title": "🧠 ذاكرتي" if user_lang != "en" else "🧠 My Memory", "description": "عرض وإدارة الذاكرة" if user_lang != "en" else "View & manage memory"},
+                    {"id": "cmd_study", "title": t("wa.menu_study", user_lang), "description": t("wa.menu_study_desc", user_lang)},
+                    {"id": "cmd_memory", "title": t("wa.menu_memory", user_lang), "description": t("wa.menu_memory_desc", user_lang)},
                 ],
             }, {
-                "title": "🎨 الوسائط والصور ⭐" if user_lang != "en" else "🎨 Media & Images ⭐",
+                "title": t("wa.menu_media", user_lang),
                 "rows": [
-                    {"id": "cmd_image_gen", "title": "🎨 إنشاء صورة" if user_lang != "en" else "🎨 Generate Image", "description": "Premium — صور من وصف" if user_lang != "en" else "Premium — images from description"},
-                    {"id": "cmd_image_edit", "title": "🖌️ تعديل صورة" if user_lang != "en" else "🖌️ Edit Image", "description": "Premium — عدّل صورة بالوصف" if user_lang != "en" else "Premium — edit image with text"},
+                    {"id": "cmd_image_gen", "title": t("wa.menu_image_gen", user_lang), "description": t("wa.menu_image_gen_desc", user_lang)},
+                    {"id": "cmd_image_edit", "title": t("wa.menu_image_edit", user_lang), "description": t("wa.menu_image_edit_desc", user_lang)},
                 ],
             }, {
-                "title": "📄 المستندات واليوتيوب" if user_lang != "en" else "📄 Documents & YouTube",
+                "title": t("wa.menu_documents", user_lang),
                 "rows": [
-                    {"id": "cmd_youtube", "title": "📺 ملخص يوتيوب" if user_lang != "en" else "📺 YouTube Summary", "description": "ملخص فيديو يوتيوب" if user_lang != "en" else "Summarize YouTube video"},
-                    {"id": "cmd_pdf", "title": "📄 تحليل PDF" if user_lang != "en" else "📄 PDF Analysis", "description": "ابعت PDF واسأل عنه" if user_lang != "en" else "Send PDF and ask about it"},
+                    {"id": "cmd_youtube", "title": t("wa.menu_youtube_summary", user_lang), "description": t("wa.menu_youtube_summary_desc", user_lang)},
+                    {"id": "cmd_pdf", "title": t("wa.menu_pdf", user_lang), "description": t("wa.menu_pdf_desc", user_lang)},
                 ],
             }, {
-                "title": "⚙️ الإعدادات" if user_lang != "en" else "⚙️ Settings",
+                "title": t("wa.menu_settings_section", user_lang),
                 "rows": [
-                    {"id": "cmd_settings", "title": "⚙️ الإعدادات" if user_lang != "en" else "⚙️ Settings", "description": "تغيير اللغة والإشعارات" if user_lang != "en" else "Change language & notifications"},
-                    {"id": "cmd_plan", "title": "📋 الخطة وحدودي" if user_lang != "en" else "📋 Plan & Limits", "description": "عرض خطتك واستخدامك" if user_lang != "en" else "View your plan & usage"},
+                    {"id": "cmd_settings", "title": t("wa.menu_settings", user_lang), "description": t("wa.menu_settings_desc", user_lang)},
+                    {"id": "cmd_plan", "title": t("wa.menu_plan", user_lang), "description": t("wa.menu_plan_desc", user_lang)},
                 ] + admin_row,
             }],
             header_text="🤖 My Bro",
-            footer_text="v9.20 — مساعدك الذكي" if user_lang != "en" else "v9.20 — Your AI Assistant",
+            footer_text=t("wa.menu_footer", user_lang),
         )
         
         # 🔴 FIX v3: زي التليجرام بالظبط — لو المستخدم جديد ومش مشترك، نبعتله سؤال الاشتراك
@@ -3995,12 +3997,14 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
             await _send_whatsapp_message(wa_id, "👍 مفيش مشكلة! ممكن تشترك أي وقت لو ابعتت: اشترك")
 
     elif command == "unsubscribe_confirm":
+        from memory import get_language
+        unsub_lang = get_language(wa_user_id)
         try:
             from memory import unsubscribe_user
             unsubscribe_user(wa_user_id)
-            await _send_whatsapp_message(wa_id, "❌ تم إلغاء الاشتراك.\n\nلو عايز تشترك تاني ابعت: اشترك")
+            await _send_whatsapp_message(wa_id, t("wa.unsubscribe_success", unsub_lang))
         except Exception:
-            await _send_whatsapp_message(wa_id, "❌ تم إلغاء الاشتراك.")
+            await _send_whatsapp_message(wa_id, t("wa.unsubscribe_error", unsub_lang))
 
     # ══════════════════════════════════════
     # LANGUAGE

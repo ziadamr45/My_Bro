@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from config import PDF_MAX_FILE_SIZE
+from i18n import t
 from ai_engine import analyze_image
 from memory import (
     get_language, increment_command_count, increment_chat_count,
@@ -208,7 +209,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file_type_label = {
-        "pdf": "PDF", "docx": "Word", "doc": "Word", "txt": "نصي",
+        "pdf": "PDF", "docx": "Word", "doc": "Word", "txt": t("media.file_type_txt", lang),
         "md": "Markdown", "csv": "CSV", "json": "JSON",
     }.get(ext, ext.upper())
 

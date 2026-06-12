@@ -5,6 +5,7 @@ Callback query handler and settings state management.
 import json
 import logging
 
+from i18n import t
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -756,7 +757,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Premium check
         if not can_use_image_edit(user_id):
-            feature_name = "🖌️ تعديل صور / Image Edit"
+            feature_name = t("feature.image_edits", lang)
             await query.message.reply_text(
                 premium_required_message(feature_name, lang),
                 parse_mode="HTML",

@@ -153,15 +153,14 @@ async def broadcast_daily_news(context: ContextTypes.DEFAULT_TYPE):
             logger.warning("No articles after summarization. Skipping broadcast.")
             return
 
-        days_ar = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
-        months_ar = ["", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+        from i18n import format_date_ar, format_date_en
 
         messages = {}
         for lang_code in ["ar", "en"]:
             if lang_code == "ar":
-                date_str = f"{days_ar[now.weekday()]}, {now.day} {months_ar[now.month]} {now.year}"
+                date_str = format_date_ar(now)
             else:
-                date_str = now.strftime("%A, %B %d, %Y")
+                date_str = format_date_en(now)
 
             header = daily_news_header(lang_code, date_str)
             items = []
