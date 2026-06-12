@@ -1475,7 +1475,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                 media_response = requests.post(
                                     f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/media",
                                     headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
-                                    files={"file": ("threads_video.mp4", vf, "video/mp4")},
+                                    files={"file": (f"{real_title[:50]}.mp4", vf, "video/mp4")},
                                     data={"messaging_product": "whatsapp", "type": "video"},
                                     timeout=180
                                 )
@@ -1494,7 +1494,8 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                         # 🔴 الإرسال المباشر فشل — نحاول Supabase كـ fallback
                         logger.info(f"🧵 Threads WA: Direct send failed, trying Supabase upload...")
                     
-                    # 🔴 الملف كبير (>25MB) أو الإرسال المباشر فشل → رفع على Supabase
+                    # 🔴 الملف كبير (>100MB) أو الإرسال المباشر فشل → رفع على Supabase
+                    # 🔴 FIX v3: Supabase free tier has 50MB limit — upload_and_get_link now auto-compresses
                     try:
                         from supabase_storage import upload_and_get_link
                         if file_size > 100 * 1024 * 1024:
@@ -1504,7 +1505,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                         cloud_msg = await asyncio.wait_for(
                             upload_and_get_link(
                                 file_path=file_path,
-                                filename=f"threads_video.mp4",
+                                filename=f"{real_title[:50]}.mp4",
                                 content_type="video/mp4",
                                 platform="whatsapp",
                                 title=real_title,
@@ -1519,7 +1520,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             except: pass
                             return
                         else:
-                            logger.warning("🧵 Threads WA: Supabase upload returned None")
+                            logger.warning("🧵 Threads WA: Supabase upload returned None (file too large even after compression?)")
                     except asyncio.TimeoutError:
                         logger.warning("🧵 Threads WA: Supabase upload timed out")
                     except Exception as supa_err:
@@ -6640,7 +6641,13 @@ async def _handle_wa_video_search(wa_id: str, query: str, wa_user_id: int,
 
 async def _handle_wa_audio_search(wa_id: str, query: str, wa_user_id: int,
                                    contact_name: str, message_id: str, is_admin: bool):
-    """بحث SoundCloud + عرض نتائج + تحميل صوت عبر WhatsApp"""
+    """بحث صوت + عرض نتائج + تحميل صوت عبر WhatsApp
+    
+    🔴 FIX v3: Dailymotion كمحرك بحث أساسي للصوت
+    - Dailymotion API مجاني ومفتوح — مش محتاج API key
+    - yt-dlp بيدعم Dailymotion للتحميل
+    - SoundCloud كـ fallback
+    """
     # 🛡️ Safety: Check query before searching
     try:
         is_safe, reason = await check_query_safety(query, platform="whatsapp", user_id=str(wa_user_id))
@@ -6650,26 +6657,36 @@ async def _handle_wa_audio_search(wa_id: str, query: str, wa_user_id: int,
     except Exception as e:
         logger.warning(f"🛡️ Query safety check failed (allowing): {e}")
     
-    await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في SoundCloud عن: {query}...")
+    await _send_whatsapp_message(wa_id, f"🔍 جاري البحث عن صوت: {query}...")
+    
+    results = None
+    search_source = "dailymotion"
     
     try:
-        from soundcloud_search import search_soundcloud, format_search_results as format_sc_results
+        # 🔴 الطريقة 1: Dailymotion Search (أساسي — مجاني ومفتوح ومستقر)
+        try:
+            from dailymotion_search import search_dailymotion
+            results = await search_dailymotion(query, max_results=5)
+            if results:
+                # Mark results as audio search for proper handling
+                for r in results:
+                    r["_search_type"] = "audio"
+                logger.info(f"🎵 Dailymotion audio search: {len(results)} results for '{query}'")
+        except Exception as dm_err:
+            logger.warning(f"🎵 Dailymotion search failed: {dm_err}")
         
-        results = await search_soundcloud(query, max_results=5)
-        
-        # ✅ FIX: If SoundCloud fails, fallback to YouTube search (audio mode)
+        # 🔴 الطريقة 2: SoundCloud كـ fallback
         if not results:
-            logger.info(f"🎵 SoundCloud search failed for '{query}', trying YouTube as fallback...")
-            await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في YouTube عن: {query}...")
+            logger.info(f"🎵 Dailymotion search failed for '{query}', trying SoundCloud as fallback...")
+            await _send_whatsapp_message(wa_id, f"🔍 جاري البحث في SoundCloud عن: {query}...")
             try:
-                from youtube_search import search_youtube, format_search_results as format_yt_results
-                results = await search_youtube(query, max_results=5)
+                from soundcloud_search import search_soundcloud
+                results = await search_soundcloud(query, max_results=5)
                 if results:
-                    # Mark results as audio search for proper handling
-                    for r in results:
-                        r["_search_type"] = "audio"
-            except Exception as yt_err:
-                logger.warning(f"🎵 YouTube fallback also failed: {yt_err}")
+                    search_source = "soundcloud"
+                    logger.info(f"🎵 SoundCloud audio search: {len(results)} results for '{query}'")
+            except Exception as sc_err:
+                logger.warning(f"🎵 SoundCloud fallback also failed: {sc_err}")
         
         if not results:
             await _send_whatsapp_message(wa_id, "❌ مفيش نتائج. جرب كلمات بحث تانية!")
@@ -6692,16 +6709,34 @@ async def _handle_wa_audio_search(wa_id: str, query: str, wa_user_id: int,
             "created_at": time.time(),
         }
         
-        text = format_sc_results(results, lang="ar")
+        # تنسيق النتائج
+        source_label = "Dailymotion" if search_source == "dailymotion" else "SoundCloud"
+        text = f"🔍 *نتائج بحث صوت {source_label}* ({len(results)} نتيجة)\n"
+        text += "━━━━━━━━━━━━━━━━━\n\n"
+        
+        for i, r in enumerate(results):
+            title = r.get('title', 'بدون عنوان')
+            duration = r.get('duration', '0:00')
+            channel = r.get('channel', '')
+            views = r.get('views', '0')
+            
+            text += f"*{i+1}.* {title}\n"
+            if duration and duration != "0:00":
+                text += f"⏱ {duration}"
+            if channel:
+                text += f" | 🎤 {channel[:20]}"
+            if views and views != "0":
+                text += f" | ▶️ {views}"
+            text += "\n\n"
         
         sections = [{
-            "title": "🎵 نتائج SoundCloud - صوت",
+            "title": f"🎵 نتائج {source_label} - صوت",
             "rows": []
         }]
         
         for i, r in enumerate(results):
             title = r['title'][:24]
-            desc = f"⏱ {r['duration']} | 📺 {r['channel'][:15]}"
+            desc = f"⏱ {r.get('duration', '0:00')} | 🎤 {r.get('channel', '')[:15]}"
             sections[0]["rows"].append({
                 "id": f"wa_as_{cache_key}_{i}",
                 "title": f"{i+1}. {title}",

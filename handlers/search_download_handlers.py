@@ -193,7 +193,13 @@ async def video_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /audio <بحث> — بحث SoundCloud وتحميل صوت MP3"""
+    """أمر /audio <بحث> — بحث صوت وتحميل MP3
+    
+    🔴 FIX v3: Dailymotion كمحرك بحث أساسي للصوت
+    - Dailymotion API مجاني ومفتوح — مش محتاج API key
+    - yt-dlp بيدعم Dailymotion للتحميل
+    - SoundCloud كـ fallback
+    """
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
@@ -211,9 +217,9 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not query:
         if lang == "ar":
-            msg = "🎵 <b>بحث صوت SoundCloud</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/audio قرآن كريم عبد الباسط</code>"
+            msg = "🎵 <b>بحث صوت</b>\n\nاكتب كلمة البحث بعد الأمر\nمثال: <code>/audio قرآن كريم عبد الباسط</code>"
         else:
-            msg = "🎵 <b>SoundCloud Audio Search</b>\n\nType your search query after the command\nExample: <code>/audio Quran recitation</code>"
+            msg = "🎵 <b>Audio Search</b>\n\nType your search query after the command\nExample: <code>/audio Quran recitation</code>"
         await update.message.reply_text(msg, parse_mode="HTML")
         return
     
@@ -231,14 +237,37 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
         pass  # Fail-open: let content through if safety check fails
     
     status_msg = await update.message.reply_text(
-        f"🔍 جاري البحث في SoundCloud عن: {query}..." if lang == "ar"
-        else f"🔍 Searching SoundCloud for: {query}..."
+        f"🔍 جاري البحث عن صوت: {query}..." if lang == "ar"
+        else f"🔍 Searching audio for: {query}..."
     )
     
+    results = None
+    search_source = "dailymotion"
+    
     try:
-        from soundcloud_search import search_soundcloud
+        # 🔴 الطريقة 1: Dailymotion Search (أساسي — مجاني ومفتوح ومستقر)
+        try:
+            from dailymotion_search import search_dailymotion
+            results = await search_dailymotion(query, max_results=5)
+            if results:
+                # Mark results as audio search for proper handling
+                for r in results:
+                    r["_search_type"] = "audio"
+                logger.info(f"🎵 Dailymotion audio search: {len(results)} results for '{query}'")
+        except Exception as dm_err:
+            logger.warning(f"🎵 Dailymotion search failed: {dm_err}")
         
-        results = await search_soundcloud(query, max_results=5)
+        # 🔴 الطريقة 2: SoundCloud كـ fallback
+        if not results:
+            logger.info(f"🎵 Dailymotion search failed for '{query}', trying SoundCloud as fallback...")
+            try:
+                from soundcloud_search import search_soundcloud
+                results = await search_soundcloud(query, max_results=5)
+                if results:
+                    search_source = "soundcloud"
+                    logger.info(f"🎵 SoundCloud audio search: {len(results)} results for '{query}'")
+            except Exception as sc_err:
+                logger.warning(f"🎵 SoundCloud fallback also failed: {sc_err}")
         
         if not results:
             await status_msg.edit_text(
@@ -262,6 +291,8 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
         
         await status_msg.delete()
         
+        source_label = "Dailymotion" if search_source == "dailymotion" else "SoundCloud"
+        
         keyboard = []
         for i, r in enumerate(results):
             title = r.get('title', 'بدون عنوان')[:40]
@@ -276,21 +307,15 @@ async def audio_search_command(update: Update, context: ContextTypes.DEFAULT_TYP
             ])
         
         if lang == "ar":
-            text = f"🎵 <b>نتائج بحث SoundCloud عن: {query}</b>\n\nاختار صوت:"
+            text = f"🎵 <b>نتائج بحث صوت {source_label} عن: {query}</b>\n\nاختار صوت:"
         else:
-            text = f"🎵 <b>SoundCloud results for: {query}</b>\n\nChoose audio:"
+            text = f"🎵 <b>{source_label} audio results for: {query}</b>\n\nChoose audio:"
         
         await update.message.reply_text(
             text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-    except ImportError:
-        logger.error("❌ soundcloud_search module not available")
-        await status_msg.edit_text(
-            "❌ ميزة البحث مش متاحة حالياً." if lang == "ar"
-            else "❌ Search feature is currently unavailable."
-        )
     except Exception as e:
         logger.error(f"❌ Audio search error: {e}")
         await status_msg.edit_text(

@@ -16,7 +16,7 @@ from memory import (
     save_conversation, save_learning, detect_interests,
 )
 from formatters import clean_ai_response, smart_split_message
-from progress import ProgressManager, AI_STAGES, LEARN_STAGES, ROADMAP_STAGES
+from progress import ProgressManager, AI_STAGES, LEARN_STAGES, ROADMAP_STAGES, YOUTUBE_STAGES
 from dashboard import track_event
 
 from handlers.keyboards import (
@@ -98,24 +98,39 @@ async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, lang: str, user_id: int):
-    """Process a YouTube URL - summarize and show buttons"""
+    """Process a YouTube URL - summarize and show buttons
+    
+    🔴 FIX v2:
+    - استخدم YOUTUBE_STAGES (4 مراحل) بدل AI_STAGES (3 مراحل) — تقدم أدق
+    - زيادة الـ timeout لـ 180 ثانية (التلخيص بياخد وقت)
+    """
     from agents.youtube_agent import YouTubeAgent
     from agents.pdf_agent import PDFAgent
     yt_agent = YouTubeAgent()
 
     video_id = yt_agent.extract_video_id(url)
 
-    stages = AI_STAGES(lang)
+    stages = YOUTUBE_STAGES(lang)
     title = "تلخيص فيديو YouTube" if lang == "ar" else "Summarizing YouTube video"
-    progress = ProgressManager(update, context, stages, lang, title)
+    progress = ProgressManager(update, context, stages, lang, title, timeout=180)
     await progress.start()
 
     try:
+        # Stage 0: جلب معلومات الفيديو (0% → 25%)
         await progress.update_stage(0)
+        
+        # Stage 1: استخراج الترجمة + تلخيص (25% → 50%)
+        # summarize_video() internally does: get_video_info() → get_transcript() → call_ai()
+        # This is the longest operation — can take 30-120+ seconds
         await progress.update_stage(1)
         summary = await yt_agent.summarize_video(url, lang, user_id=user_id)
         summary = clean_ai_response(summary)
+        
+        # Stage 2: تلخيص المحتوى بالذكاء الاصطناعي (50% → 75%)
         await progress.update_stage(2)
+        
+        # Stage 3: تنسيق الملخص (75% → 100%)
+        await progress.update_stage(3)
 
         # Store context for callback buttons
         _user_yt_context[user_id] = {
@@ -128,7 +143,7 @@ async def _process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYP
         await progress.complete(final_message=summary, reply_markup=inline_keyboard, delete_progress=False)
 
     except Exception as e:
-        logger.error(f"Error processing YouTube URL: {e}")
+        logger.error(f"Error processing YouTube URL: {e}", exc_info=True)
         try:
             track_event("total_errors")
         except Exception:

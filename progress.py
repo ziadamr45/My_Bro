@@ -116,6 +116,15 @@ def ROADMAP_STAGES(lang: str = "ar") -> List[Stage]:
         Stage("✍️", "كتابة المحتوى", "Writing content"),
     ]
 
+def YOUTUBE_STAGES(lang: str = "ar") -> List[Stage]:
+    """مراحل تلخيص YouTube — تفصيلية عشان المستخدم يشوف التقدم"""
+    return [
+        Stage("🎬", "جلب معلومات الفيديو", "Fetching video info"),
+        Stage("📝", "استخراج الترجمة", "Extracting captions"),
+        Stage("🧠", "تلخيص المحتوى بالذكاء الاصطناعي", "AI summarizing content"),
+        Stage("✍️", "تنسيق الملخص", "Formatting summary"),
+    ]
+
 
 # ═══════════════════════════════════════
 # شريط التقدم - Progress Bar
@@ -297,7 +306,8 @@ class ProgressManager:
         إنهاء نظام التقدم
         - إيقاف مؤشر الكتابة والعداد الحي
         - حذف رسالة التقدم أو تحديثها بالنتيجة النهائية
-        - 🔴 FIX: لو الرسالة أطول من 4096 حرف، يتم حذف الـ progress وإرسالها كرسالة جديدة
+        - 🔴 FIX v2: لو الرسالة أطول من 4096 حرف أو فيها HTML غلط،
+          احذف الـ progress وابعت الرسالة كرسالة جديدة مقسمة
         """
         # إيقاف جميع المهام الخلفية
         await self._stop_background_tasks()
@@ -310,23 +320,70 @@ class ProgressManager:
                 # حذف رسالة التقدم وإرسال النتيجة النهائية
                 await self.progress_msg.delete()
             elif final_message:
-                # 🔴 FIX: لو الرسالة طويلة جداً لتيليجرام، احذف الـ progress وابلغ إنها هتتبعت من بره
+                # 🔴 FIX v2: لو الرسالة طويلة جداً أو فيها HTML غلط،
+                # احذف الـ progress وابعت الرسالة كرسالة جديدة
                 if len(final_message) > 4096:
-                    logger.warning(f"⚠️ Response too long ({len(final_message)} chars) for edit_text, deleting progress message")
+                    logger.warning(f"⚠️ Response too long ({len(final_message)} chars) for edit_text, sending as new message")
                     await self.progress_msg.delete()
-                    return  # الـ caller لازم يبعت الرسالة بنفسه مقسمة
+                    # 🔴 FIX: ابعت الرسالة مقسمة بدل ما تضيع
+                    from formatters import smart_split_message
+                    chunks = smart_split_message(final_message, max_length=4000)
+                    chat_id = self.update.effective_chat.id
+                    for i, chunk in enumerate(chunks):
+                        try:
+                            if i == len(chunks) - 1 and reply_markup:
+                                await self.context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=chunk,
+                                    parse_mode="HTML",
+                                    disable_web_page_preview=True,
+                                    reply_markup=reply_markup,
+                                )
+                            else:
+                                await self.context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=chunk,
+                                    parse_mode="HTML",
+                                    disable_web_page_preview=True,
+                                )
+                        except Exception as chunk_err:
+                            # لو HTML غلط، ابعت من غير parse_mode
+                            logger.warning(f"⚠️ Failed to send chunk with HTML: {chunk_err}")
+                            try:
+                                await self.context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=chunk,
+                                    disable_web_page_preview=True,
+                                )
+                            except Exception:
+                                pass
+                    return
                 # تحديث رسالة التقدم بالنتيجة النهائية
-                await self.progress_msg.edit_text(
-                    final_message,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    reply_markup=reply_markup,
-                )
+                try:
+                    await self.progress_msg.edit_text(
+                        final_message,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                        reply_markup=reply_markup,
+                    )
+                except Exception as edit_err:
+                    # 🔴 FIX v2: لو HTML غلط، جرب من غير parse_mode
+                    logger.warning(f"⚠️ edit_text with HTML failed: {edit_err}, trying without parse_mode")
+                    try:
+                        await self.progress_msg.delete()
+                        await self.context.bot.send_message(
+                            chat_id=self.update.effective_chat.id,
+                            text=final_message,
+                            disable_web_page_preview=True,
+                            reply_markup=reply_markup,
+                        )
+                    except Exception as send_err:
+                        logger.warning(f"⚠️ send_message also failed: {send_err}")
             elif delete_progress:
                 # حذف رسالة التقدم فقط
                 await self.progress_msg.delete()
         except Exception as e:
-            logger.debug(f"Could not finalize progress message: {e}")
+            logger.warning(f"⚠️ Could not finalize progress message: {e}")
 
     async def error(self, error_message: str):
         """عرض رسالة خطأ"""
