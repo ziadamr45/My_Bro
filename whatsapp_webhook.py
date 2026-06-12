@@ -1210,6 +1210,8 @@ _URL_PATTERNS = {
     "telegram": re.compile(r'(https?://)?(t\.me|telegram\.me|telegram\.org)/', re.IGNORECASE),
     "threads": re.compile(r'(https?://)?(www\.)?threads\.(net|com)/', re.IGNORECASE),
     "reddit": re.compile(r'(https?://)?(www\.)?(reddit\.com|redd\.it)/', re.IGNORECASE),
+    "dailymotion": re.compile(r'(https?://)?(www\.)?(dailymotion\.com|dai\.ly)/', re.IGNORECASE),
+    "soundcloud": re.compile(r'(https?://)?(www\.)?soundcloud\.com/', re.IGNORECASE),
 }
 
 _GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>\"]+', re.IGNORECASE)
@@ -1304,7 +1306,8 @@ async def _show_quality_selection(wa_id: str, url: str, wa_user_id: int,
     platform_names = {
         "youtube": "YouTube", "facebook": "Facebook", "instagram": "Instagram",
         "tiktok": "TikTok", "twitter": "Twitter/X", "telegram": "Telegram",
-        "threads": "Threads", "reddit": "Reddit", "unknown": "🌐",
+        "threads": "Threads", "reddit": "Reddit", "dailymotion": "Dailymotion",
+        "soundcloud": "SoundCloud", "unknown": "🌐",
     }
     platform_display = platform_names.get(platform, platform)
     url_key = _store_url(url)
@@ -1345,7 +1348,8 @@ async def _show_quality_selection_for_search(wa_id: str, url: str, title: str,
     platform_names = {
         "youtube": "YouTube", "facebook": "Facebook", "instagram": "Instagram",
         "tiktok": "TikTok", "twitter": "Twitter/X", "telegram": "Telegram",
-        "threads": "Threads", "reddit": "Reddit", "unknown": "🌐",
+        "threads": "Threads", "reddit": "Reddit", "dailymotion": "Dailymotion",
+        "soundcloud": "SoundCloud", "unknown": "🌐",
     }
     platform_display = platform_names.get(platform, platform)
     url_key = _store_url(url)
@@ -1425,7 +1429,8 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
         platform_names = {
             "youtube": "YouTube", "facebook": "Facebook", "instagram": "Instagram",
             "tiktok": "TikTok", "twitter": "Twitter/X", "telegram": "Telegram",
-            "threads": "Threads", "reddit": "Reddit", "unknown": "🌐",
+            "threads": "Threads", "reddit": "Reddit", "dailymotion": "Dailymotion",
+            "soundcloud": "SoundCloud", "unknown": "🌐",
         }
         platform_display = platform_names.get(platform, platform)
         
@@ -1468,6 +1473,71 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 MAX_WHATSAPP_DIRECT_SIZE = 25 * 1024 * 1024    # 25MB — عشان نتجنب OOM على Railway (كان 100MB)
                 
                 if is_video:
+                    # 🔴 FIX v5: فحص الكوديك وتحويله لـ H.264+AAC قبل الإرسال
+                    # WhatsApp بيرفض الفيديوهات اللي مش H.264+AAC+MP4
+                    # Threads بينزل فيديوهات أحياناً بـ VP9 أو كوديك تاني → لازم نحولها
+                    try:
+                        import subprocess as _sp
+                        import json as _json
+                        probe_result = _sp.run(
+                            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', file_path],
+                            capture_output=True, timeout=15
+                        )
+                        threads_vcodec = None
+                        threads_acodec = None
+                        
+                        if probe_result.returncode == 0:
+                            try:
+                                probe_data = _json.loads(probe_result.stdout)
+                                for stream in probe_data.get('streams', []):
+                                    if stream.get('codec_type') == 'video':
+                                        threads_vcodec = stream.get('codec_name', '')
+                                    elif stream.get('codec_type') == 'audio':
+                                        threads_acodec = stream.get('codec_name', '')
+                            except Exception:
+                                pass
+                        
+                        needs_conversion = False
+                        if threads_vcodec and threads_vcodec not in ("h264", "avc1", "avc", "mpeg4", ""):
+                            needs_conversion = True
+                            logger.info(f"🧵 Threads WA: Video codec is {threads_vcodec}, converting to h264...")
+                        if threads_acodec and threads_acodec not in ("aac", "mp3", ""):
+                            needs_conversion = True
+                            logger.info(f"🧵 Threads WA: Audio codec is {threads_acodec}, converting to aac...")
+                        
+                        # لو مفيش audio stream خالص → نحول عشان نضيف صوت
+                        if not threads_acodec and threads_vcodec:
+                            needs_conversion = True
+                            logger.info(f"🧵 Threads WA: No audio stream, converting to add AAC...")
+                        
+                        if needs_conversion:
+                            import multiprocessing
+                            conv_threads = min(multiprocessing.cpu_count(), 4)
+                            converted_path = file_path + "_h264.mp4"
+                            conv_cmd = [
+                                'ffmpeg', '-i', file_path,
+                                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+                                '-c:a', 'aac', '-b:a', '128k',
+                                '-movflags', '+faststart',
+                                '-threads', str(conv_threads),
+                                '-y', converted_path
+                            ]
+                            conv_result = _sp.run(conv_cmd, capture_output=True, timeout=120)
+                            if conv_result.returncode == 0 and os.path.exists(converted_path) and os.path.getsize(converted_path) > 1000:
+                                try: os.remove(file_path)
+                                except: pass
+                                file_path = converted_path
+                                file_size = os.path.getsize(file_path)
+                                size_mb = file_size / (1024 * 1024)
+                                size_str = f"{size_mb:.1f}MB"
+                                logger.info(f"🧵 Threads WA: h264 conversion succeeded! New size: {size_str}")
+                            else:
+                                logger.warning(f"🧵 Threads WA: h264 conversion failed, trying original file")
+                                try: os.remove(converted_path)
+                                except: pass
+                    except Exception as conv_err:
+                        logger.warning(f"🧵 Threads WA: Codec check/conversion error: {conv_err}")
+                    
                     if file_size <= MAX_WHATSAPP_DIRECT_SIZE:
                         # إرسال مباشر
                         try:
@@ -1494,7 +1564,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                         # 🔴 الإرسال المباشر فشل — نحاول Supabase كـ fallback
                         logger.info(f"🧵 Threads WA: Direct send failed, trying Supabase upload...")
                     
-                    # 🔴 الملف كبير (>100MB) أو الإرسال المباشر فشل → رفع على Supabase
+                    # 🔴 الملف كبير (>25MB) أو الإرسال المباشر فشل → رفع على Supabase
                     # 🔴 FIX v3: Supabase free tier has 50MB limit — upload_and_get_link now auto-compresses
                     try:
                         from supabase_storage import upload_and_get_link
@@ -1588,6 +1658,30 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 merge_output = None
                 remux = None
                 progress_msg = f"🎵 جاري استخراج الصوت من {platform_display}..."
+            elif platform in ("dailymotion", "soundcloud"):
+                # 🔴 FIX: Dailymotion/SoundCloud — صيغة أبسط لأنهم مش زي YouTube
+                # Dailymotion بيرجع formats مختلفة → best+/best أحسن من bestvideo+bestaudio
+                if quality == "best":
+                    format_str = (
+                        'best[ext=mp4][height<=1080]/'
+                        'best[height<=1080]/'
+                        'best'
+                    )
+                elif quality == "medium":
+                    format_str = (
+                        'best[ext=mp4][height<=720]/'
+                        'best[height<=720]/'
+                        'best'
+                    )
+                else:  # low
+                    format_str = (
+                        'best[ext=mp4][height<=480]/'
+                        'best[height<=480]/'
+                        'best'
+                    )
+                merge_output = 'mp4'
+                remux = 'mp4'
+                progress_msg = f"📥 جاري تحميل الفيديو من {platform_display}..."
             elif is_facebook_family:
                 # Facebook family: prefer merge (bestvideo+bestaudio) for audio guarantee
                 if quality == "best":
@@ -2066,8 +2160,38 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                     except Exception:
                         pass
             
-            # ═══ المرحلة 2: yt-dlp player_client fallback chain (زي التليجرام) ═══
-            if info is None:
+            # 🔴 FIX: Retry with simpler format for non-YouTube platforms (Dailymotion/SoundCloud)
+            # لو أول محاولة فشلت والمنصة مش YouTube → نجرب بـ format أبسط
+            if info is None and not is_youtube:
+                try:
+                    retry_format = 'best'
+                    retry_opts = dict(ydl_opts)
+                    retry_opts['format'] = retry_format
+                    # شيلنا postprocessors عشان ممكن تكون سبب المشكلة
+                    retry_opts.pop('postprocessors', None)
+                    retry_opts.pop('remote_components', None)
+                    retry_opts.pop('merge_output_format', None)
+                    retry_opts.pop('remux_video', None)
+                    
+                    logger.info(f"🔧 WhatsApp yt-dlp: Retrying with 'best' format for {platform}")
+                    
+                    def _run_ytdlp_simple():
+                        with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                            return ydl.extract_info(url, download=True)
+                    
+                    info = await asyncio.wait_for(
+                        loop.run_in_executor(None, _run_ytdlp_simple),
+                        timeout=180
+                    )
+                    if info:
+                        logger.info(f"✅ yt-dlp simple format retry succeeded for {platform}")
+                except Exception as retry_err:
+                    last_error = retry_err
+                    logger.warning(f"⚠️ yt-dlp simple format retry failed for {platform}: {retry_err}")
+            
+            # ═══ المرحلة 2: yt-dlp player_client fallback chain (YouTube فقط!) ═══
+            # 🔴 FIX: player_client ده لليوتيوب بس — مش بيشتغل مع Dailymotion/SoundCloud
+            if info is None and is_youtube:
                 _YOUTUBE_PLAYER_CLIENTS = ['android', 'ios', 'mweb', 'tv', 'web']
                 for pc_idx, pc in enumerate(_YOUTUBE_PLAYER_CLIENTS):
                     try:
@@ -2101,6 +2225,90 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                                 trigger_ytdlp_update()
                             except Exception:
                                 pass
+            
+            # 🔴 FIX: Cobalt API لكل المنصات (مش بس YouTube!)
+            # Cobalt بيدعم Dailymotion و SoundCloud و TikTok و Instagram وغيرهم
+            if info is None and not is_youtube:
+                try:
+                    import aiohttp as _aiohttp_cobalt
+                    cobalt_instances = [
+                        'https://api.cobalt.tools',
+                        'https://cobalt-api.kwiatekmiki.com',
+                    ]
+                    
+                    for cobalt_url in cobalt_instances:
+                        try:
+                            cobalt_headers = {
+                                'Accept': 'application/json',
+                                'Content-Type': 'application/json',
+                            }
+                            cobalt_payload = {'url': url}
+                            if is_audio_only:
+                                cobalt_payload['downloadMode'] = 'audio'
+                            elif quality in ("medium", "low"):
+                                cobalt_payload['videoQuality'] = '720' if quality == 'medium' else '480'
+                            
+                            async with _aiohttp_cobalt.ClientSession() as cobalt_session:
+                                async with cobalt_session.post(
+                                    cobalt_url, headers=cobalt_headers, json=cobalt_payload,
+                                    timeout=_aiohttp_cobalt.ClientTimeout(total=30)
+                                ) as cobalt_resp:
+                                    if cobalt_resp.status != 200:
+                                        continue
+                                    
+                                    cobalt_data = await cobalt_resp.json()
+                                    cobalt_status = cobalt_data.get('status', '')
+                                    
+                                    dl_url = None
+                                    if cobalt_status in ('redirect', 'tunnel'):
+                                        dl_url = cobalt_data.get('url', '')
+                                    elif cobalt_status == 'picker':
+                                        picker = cobalt_data.get('picker', [])
+                                        if picker:
+                                            dl_url = picker[0].get('url', '')
+                                    
+                                    if dl_url:
+                                        logger.info(f"🟠 WA Cobalt: Got download URL from {cobalt_url} for {platform}")
+                                        ext = "mp3" if is_audio_only else "mp4"
+                                        cobalt_file = os.path.join(tmpdir, f"cobalt_dl.{ext}")
+                                        
+                                        dl_headers = {'Referer': 'https://www.youtube.com/'}
+                                        async with cobalt_session.get(dl_url, headers=dl_headers,
+                                              timeout=_aiohttp_cobalt.ClientTimeout(total=120)) as dl_resp:
+                                            if dl_resp.status == 200:
+                                                cobalt_file_size = 0
+                                                with open(cobalt_file, 'wb') as cf:
+                                                    async for chunk in dl_resp.content.iter_chunked(8192):
+                                                        cf.write(chunk)
+                                                        cobalt_file_size += len(chunk)
+                                                
+                                                if cobalt_file_size > 1000:
+                                                    # 🔴 Build info dict for the standard send flow
+                                                    cobalt_title = cobalt_data.get('filename', '')
+                                                    if cobalt_title:
+                                                        cobalt_title = os.path.splitext(cobalt_title)[0][:80]
+                                                    if not cobalt_title:
+                                                        cobalt_title = f"{platform_display} Video"
+                                                    info = {
+                                                        "title": cobalt_title,
+                                                        "duration": 0,
+                                                        "height": 720,
+                                                        "vcodec": "h264",
+                                                        "acodec": "aac",
+                                                        "_cobalt_file": cobalt_file,
+                                                        "_cobalt_size": cobalt_file_size,
+                                                    }
+                                                    logger.info(f"🟠 WA Cobalt: Download succeeded! Size: {cobalt_file_size // 1024}KB")
+                                                    break
+                                                else:
+                                                    try: os.remove(cobalt_file)
+                                                    except: pass
+                        except asyncio.TimeoutError:
+                            logger.debug(f"🟠 WA Cobalt {cobalt_url} timed out")
+                        except Exception as cobalt_err:
+                            logger.debug(f"🟠 WA Cobalt {cobalt_url} error: {cobalt_err}")
+                except Exception as cobalt_outer_err:
+                    logger.warning(f"🟠 WA Cobalt non-YT error: {cobalt_outer_err}")
             
             # ═══ المرحلة 3: Cobalt API Fallback (fallback تالت — أسرع وأضمن من Piped) ═══
             # 🔴 نفس fallback chain زي التليجرام بالظبط
@@ -2872,16 +3080,23 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                 await feedback.error()
                 return
             
-            # Find the downloaded file
-            downloaded_files = os.listdir(tmpdir)
-            if not downloaded_files:
-                await _send_whatsapp_message(wa_id, "❌ فشل تحميل الفيديو. جرب تاني! 📥")
-                await feedback.error()
-                return
-            
-            video_file = os.path.join(tmpdir, downloaded_files[0])
-            file_size = os.path.getsize(video_file)
-            title = info.get('title', 'فيديو')[:80]
+            # 🔴 FIX: لو Cobalt نزل الملف مباشرة (مش عبر yt-dlp)
+            cobalt_direct_file = info.get('_cobalt_file') if isinstance(info, dict) else None
+            if cobalt_direct_file and os.path.exists(cobalt_direct_file):
+                video_file = cobalt_direct_file
+                file_size = info.get('_cobalt_size', os.path.getsize(video_file))
+                title = info.get('title', 'فيديو')[:80]
+            else:
+                # Find the downloaded file (yt-dlp case)
+                downloaded_files = os.listdir(tmpdir)
+                if not downloaded_files:
+                    await _send_whatsapp_message(wa_id, "❌ فشل تحميل الفيديو. جرب تاني! 📥")
+                    await feedback.error()
+                    return
+                
+                video_file = os.path.join(tmpdir, downloaded_files[0])
+                file_size = os.path.getsize(video_file)
+                title = info.get('title', 'فيديو')[:80]
             
             logger.info(f"📥 Downloaded video: {title} ({file_size / 1024 / 1024:.1f}MB, quality={quality})")
             
