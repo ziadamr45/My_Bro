@@ -398,7 +398,8 @@ _response_cache = OrderedDict()
 _MAX_CACHE_SIZE = 200
 _CACHE_TTL = 300  # 5 دقائق
 
-# أنواع الرسائل اللي بنخزنها مؤقتاً (أسئلة بسيطة + أسئلة هوية)
+# أنواع الرسائل اللي بنخزنها مؤقتاً (أسئلة بسيطة + أسئلة هوية + رسائل قصيرة)
+# ⚡ بس "simple" هو الآمن — لأن "chat" بيحتوي سياق شخصي
 _CACHEABLE_TASK_TYPES = {"simple"}
 
 
@@ -488,6 +489,7 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
     memory_context = ""
     conversation_history = []
     user_profile = {}
+    is_premium_user = False  # ⚡ بنخزنها هنا عشان م حد يفحص تاني
     if user_id:
         try:
             from memory_context import build_context_for_ai
@@ -495,6 +497,7 @@ async def smart_chat(user_message: str, language: str = "ar", user_id: int = Non
             memory_context = context["context_text"]
             conversation_history = context["short_term"]
             user_profile = context.get("profile", {})
+            is_premium_user = context.get("is_premium_user", False)  # ⚡ من build_context
             debug = context["debug"]
             logger.info(
                 f"🧠 Context injected: msgs={debug['short_term_messages']}, "
@@ -767,23 +770,11 @@ Examples:
     else:
         # 🔴 Premium بيحصل على max_tokens أعلى — ردود أطول وأشمل
         # المجاني max_tokens أقل — ردود مختصرة أكتر
-        # ⚠️ FIX: زودنا max_tokens عشان الرسائل كانت بتتقص (خصوصاً نماذج thinking زي R1 و Qwen3)
-        # الـ thinking tokens بتاكل جزء كبير من الـ budget فلازم نزود عشان الرد الفعلي يكمل
-        # ⚠️ FIX 2: زودنا تاني لأن الردود لسه بتقطع — نماذج thinking بتاكل أكتر مما كنا متوقعين
-        # ⚠️ FIX 3: زودنا تالت مرة — نماذج thinking (R1, Qwen3) بتاكل 50-70% من الـ tokens في التفكير
-        # فـ 16384 مش كفاية عشان الـ output الفعلي بيكون حوالي 5000-8000 tokens بس
-        if user_id:
-            try:
-                from premium import is_premium
-                from admin import is_admin
-                if is_admin(user_id, username) or is_premium(user_id):
-                    max_tokens = 32768  # ⭐ Premium: ردود طويلة جداً وشاملة (من 16384 → 32768)
-                else:
-                    max_tokens = 8192  # 🆓 Free: ردود كاملة
-            except Exception:
-                max_tokens = 8192
+        # ⚡ بنستخدم is_premium_user من build_context_for_ai() عشان م نعملش DB query تاني
+        if is_premium_user:
+            max_tokens = 32768  # ⭐ Premium: ردود طويلة جداً وشاملة
         else:
-            max_tokens = 8192
+            max_tokens = 8192  # 🆓 Free: ردود كاملة
 
     # بناء رسائل المحادثة الكاملة مع السياق
     messages_for_ai = []
@@ -817,10 +808,10 @@ Examples:
             user_id=user_id,
         )
 
-    # محاولة 3: Retry بعد ثانية (الـ cooldownات قصيرة فهتخلص بسرعة)
+    # محاولة 3: Retry بعد 3 ثواني (الـ cooldownات 30 ثانية فهتخلص بسرعة لو فشل model واحد)
     if response is None:
-        logger.warning("⚠️ First attempt failed, waiting 2s and retrying...")
-        await asyncio.sleep(2)
+        logger.warning("⚠️ First attempt failed, waiting 3s and retrying...")
+        await asyncio.sleep(3)
         response = await call_ai(
             messages_for_ai,  # دايماً list
             system_prompt=system,

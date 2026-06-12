@@ -28,6 +28,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+# ⚡ Shared requests.Session للـ connection pooling
+# بدل ما كل request تعمل TCP connection جديد، الـ Session بيعيد استخدام الاتصالات
+# ده بيقلل latency بحوالي 50-100ms لكل request
+_http_session = requests.Session()
+_http_session.headers.update({"User-Agent": "MyBro-Bot/1.0"})
+
+# ⚡ Semaphore للحد من الاستدعاءات المتزامنة — تحت ضغط عالي
+# كل المستخدمين بيضربوا الـ APIs في نفس الوقت فده بيمنع flooding
+_api_semaphore = asyncio.Semaphore(10)
+
 from config import (
     SAMBANOVA_API_KEY, SAMBANOVA_BASE_URL,
     MISTRAL_API_KEY, MISTRAL_BASE_URL,
@@ -138,8 +148,21 @@ class ProviderManager:
         cooldown = self._model_cooldowns.get(model_id, 0)
         return cooldown <= time.time()
 
-    def _set_model_cooldown(self, model_id: str, error: str, cooldown_seconds: int = 3):
-        """تعيين فترة تبريد لموديل معين بعد خطأ"""
+    def _set_model_cooldown(self, model_id: str, error: str, cooldown_seconds: int = 30):
+        """تعيين فترة تبريد لموديل معين بعد خطأ
+        
+        ⚡ cooldown_seconds الافتراضي 30 ثانية (كان 3)
+        الموديلات اللي فشلت لازم تفضل برة وقت أطول عشان:
+        1. مترجعش تتضرب وهي لسه في مشكلة
+        2. ندي فرصة للموديلات التانية تشتغل
+        3. نقلل استهلاك API calls الفاشلة
+        """
+        # زود الـ cooldown لو الخطأ 429 (rate limit) أو auth error
+        if "429" in error or "rate limit" in error.lower():
+            cooldown_seconds = max(cooldown_seconds, 60)  # دقيقة على الأقل
+        elif "401" in error or "403" in error or "auth" in error.lower():
+            cooldown_seconds = max(cooldown_seconds, 120)  # دقيقتين على الأقل
+        
         self._model_cooldowns[model_id] = time.time() + cooldown_seconds
         logger.warning(f"⏳ Model {model_id} on cooldown for {cooldown_seconds}s: {error[:80]}")
 
@@ -307,7 +330,7 @@ class ProviderManager:
 
         try:
             logger.info(f"🤖 Calling {provider_name}/{model}")
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            response = _http_session.post(url, headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
 
             data = response.json()
@@ -320,9 +343,9 @@ class ProviderManager:
                 logger.warning(f"❌ API error from {provider_name}/{model}: {error_msg[:100]}")
 
                 if "429" in str(error_msg) or "rate limit" in str(error_msg).lower():
-                    self._set_model_cooldown(model, f"Rate limited: {error_msg}", 5)
+                    self._set_model_cooldown(model, f"Rate limited: {error_msg}", 60)
                 else:
-                    self._set_model_cooldown(model, f"API error: {error_msg[:60]}", 3)
+                    self._set_model_cooldown(model, f"API error: {error_msg[:60]}", 20)
                 return None
 
             if "choices" in data and len(data["choices"]) > 0:
@@ -351,7 +374,7 @@ class ProviderManager:
 
         except requests.exceptions.Timeout:
             logger.warning(f"⏱️ Timeout ({timeout}s) for {provider_name}/{model}")
-            self._set_model_cooldown(model, "Timeout", 3)
+            self._set_model_cooldown(model, "Timeout", 20)
             return None
 
         except requests.exceptions.RequestException as e:
@@ -361,13 +384,13 @@ class ProviderManager:
                 self._set_model_cooldown(model, f"Auth error: {error_str[:80]}", 15)
             elif "429" in error_str:
                 logger.warning(f"🚫 Rate limited for {provider_name}/{model}")
-                self._set_model_cooldown(model, "Rate limit", 5)
+                self._set_model_cooldown(model, "Rate limit", 60)
             elif "404" in error_str:
                 logger.warning(f"❓ Model not found: {provider_name}/{model}")
                 self._set_model_cooldown(model, "Model not found", 10)
             else:
                 logger.warning(f"❌ Request error for {provider_name}/{model}: {error_str[:100]}")
-                self._set_model_cooldown(model, f"Request error: {error_str[:80]}", 3)
+                self._set_model_cooldown(model, f"Request error: {error_str[:80]}", 20)
             return None
 
         except Exception as e:
@@ -378,9 +401,11 @@ class ProviderManager:
                        previous_content: str, max_tokens: int, temperature: float, timeout: int,
                        api_key: str = "", _depth: int = 0) -> str:
         """محاولة إكمال الرد لو اتقص بسبب max_tokens"""
-        # 🔴 حد أقصى للعمق — 5 مرات تكملة كفاية
-        if _depth >= 5:
-            logger.warning(f"⚠️ Auto-continuation depth limit reached (5), stopping.")
+        # ⚡ حد أقصى للعمق — 2 مرات بس (كان 5)
+        # كل تكملة بتاخد وقت + API call، فـ 2 كفاية
+        # لو الرد اتقص أكتر من كده يبقى محتاج max_tokens أعلى مش تكملات أكتر
+        if _depth >= 2:
+            logger.warning(f"⚠️ Auto-continuation depth limit reached (2), stopping.")
             return None
 
         try:
@@ -417,7 +442,7 @@ class ProviderManager:
             }
 
             logger.info(f"🔄 Trying auto-continuation (depth={_depth+1}) with {provider_name}/{model}...")
-            response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            response = _http_session.post(url, json=payload, headers=headers, timeout=timeout)
 
             if response.status_code == 200:
                 data = response.json()
@@ -530,6 +555,8 @@ class ProviderManager:
         ⚡ أول 2 مسارات بالتوازي، لو فشلوا يجرب الباقي بالترتيب
         + لو كل المسارات فشلت، يجرب على cooldown كـ fallback
         """
+        # ⚡ بنحدد user_plan مرة واحدة هنا وبنمرره لباقي الكود
+        user_plan = self._get_user_plan(user_id) if user_id else "free"
         routes = self.get_model_routes(task_type, user_id=user_id)
 
         if not routes:
@@ -547,16 +574,9 @@ class ProviderManager:
             elif task_type == "summary":
                 timeout = 25
             else:
-                if user_id:
-                    try:
-                        from premium import is_premium
-                        from admin import is_admin
-                        if is_admin(user_id) or is_premium(user_id):
-                            timeout = 30
-                        else:
-                            timeout = 20
-                    except Exception:
-                        timeout = 20
+                # ⚡ بنستخدم user_plan اللي اتحدد فوق
+                if user_plan in ("admin", "premium"):
+                    timeout = 30
                 else:
                     timeout = 20
 
@@ -599,12 +619,19 @@ class ProviderManager:
         timeout: int = None,
         user_id: int = None,
     ) -> Optional[str]:
-        """استدعاء AI (غير متزامن - لا يحجب event loop)"""
+        """استدعاء AI (غير متزامن - لا يحجب event loop)
+        
+        ⚡ مع Semaphore للحد من الاستدعاءات المتزامنة
+        """
         loop = asyncio.get_event_loop()
 
+        async def _run_with_semaphore(func):
+            """تشغيل الدالة مع semaphore عشان نحد الاستدعاءات المتزامنة"""
+            async with _api_semaphore:
+                return await loop.run_in_executor(None, func)
+
         if user_id:
-            return await loop.run_in_executor(
-                None,
+            return await _run_with_semaphore(
                 lambda: self._call_sync_with_user(
                     user_id=user_id,
                     messages=messages,
@@ -615,8 +642,7 @@ class ProviderManager:
                 )
             )
 
-        return await loop.run_in_executor(
-            None,
+        return await _run_with_semaphore(
             lambda: self.call_sync(
                 messages=messages,
                 task_type=task_type,
@@ -638,6 +664,9 @@ class ProviderManager:
         """استدعاء AI مع مسارات مخصصة للمستخدم (متزامن)
         ⚡ أول 2 مسارات بالتوازي، لو فشلوا يجرب الباقي بالترتيب
         """
+        # ⚡ بنحدد user_plan مرة واحدة هنا
+        user_plan = self._get_user_plan(user_id)
+        
         routes = self.get_model_routes_for_user(user_id, task_type)
 
         if not routes:
@@ -660,16 +689,9 @@ class ProviderManager:
             elif task_type == "summary":
                 timeout = 25
             else:
-                if user_id:
-                    try:
-                        from premium import is_premium
-                        from admin import is_admin
-                        if is_admin(user_id) or is_premium(user_id):
-                            timeout = 30
-                        else:
-                            timeout = 20
-                    except Exception:
-                        timeout = 20
+                # ⚡ بنستخدم user_plan اللي اتحدد فوق
+                if user_plan in ("admin", "premium"):
+                    timeout = 30
                 else:
                     timeout = 20
 
@@ -893,7 +915,7 @@ class ProviderManager:
 
         try:
             logger.info(f"🎨 Generating image with {model} (prompt: {prompt[:50]}...)")
-            response = requests.post(url, headers=headers, json=payload, timeout=actual_timeout)
+            response = _http_session.post(url, headers=headers, json=payload, timeout=actual_timeout)
             response.raise_for_status()
 
             data = response.json()
@@ -1016,7 +1038,7 @@ class ProviderManager:
 
         try:
             logger.info(f"🖌️ Editing image with {model} canny mode (prompt: {prompt[:50]}...)")
-            response = requests.post(url, headers=headers, json=payload, timeout=actual_timeout)
+            response = _http_session.post(url, headers=headers, json=payload, timeout=actual_timeout)
 
             # لو canny mode فشل، نجرب depth mode
             if response.status_code == 422:
@@ -1035,13 +1057,13 @@ class ProviderManager:
                         "prompt": f"Based on an uploaded image: {prompt}",
                         "seed": seed,
                     }
-                    response = requests.post(url, headers=headers, json=fallback_payload, timeout=actual_timeout)
+                    response = _http_session.post(url, headers=headers, json=fallback_payload, timeout=actual_timeout)
                     response.raise_for_status()
                 else:
                     # Try depth mode as fallback
                     logger.info(f"🔄 Canny mode failed, trying depth mode...")
                     payload["mode"] = "depth"
-                    response = requests.post(url, headers=headers, json=payload, timeout=actual_timeout)
+                    response = _http_session.post(url, headers=headers, json=payload, timeout=actual_timeout)
                     if response.status_code == 422:
                         # Fallback to text-to-image
                         logger.info(f"🔄 Depth mode also failed, falling back to text-to-image...")
@@ -1049,7 +1071,7 @@ class ProviderManager:
                             "prompt": f"Create a modified version: {prompt}",
                             "seed": seed,
                         }
-                        response = requests.post(url, headers=headers, json=fallback_payload, timeout=actual_timeout)
+                        response = _http_session.post(url, headers=headers, json=fallback_payload, timeout=actual_timeout)
                         response.raise_for_status()
                     else:
                         response.raise_for_status()

@@ -167,6 +167,107 @@ def _search_tavily_sync(query: str, max_results: int = 5, search_depth: str = "b
 
 
 # ═══════════════════════════════════════
+# ⚡ ترجمة سريعة بالقاموس المحلي - Quick Arabic Query Translation
+# ═══════════════════════════════════════
+
+# قاموس بسيط للكلمات العربية الشائعة في البحث
+# ⚡ بدل ما نعمل AI call للترجمة (بتاخد 2-5 ثواني)، بنستخدم القاموس ده (فوري)
+_AR_EN_DICTIONARY = {
+    # أخبار
+    "اخبار": "news", "أخبار": "news", "الاخبار": "news", "الأخبار": "news",
+    "اخبار اليوم": "today news", "أخبار اليوم": "today news",
+    "احدث الاخبار": "latest news", "آخر الأخبار": "latest news",
+    "اخبار عاجلة": "breaking news",
+    
+    # تقنية
+    "تقنية": "technology", "تكنولوجيا": "technology", "تك": "tech",
+    "ذكاء اصطناعي": "artificial intelligence", "الذكاء الاصطناعي": "artificial intelligence",
+    "ذكاء اصطناعي اخبار": "AI news",
+    "روبوت": "robot", "شات بوت": "chatbot",
+    
+    # شركات
+    "جوجل": "Google", "أبل": "Apple", "مايكروسوفت": "Microsoft",
+    "ميتا": "Meta", "نفيديا": "Nvidia", "امازون": "Amazon",
+    "تسلا": "Tesla", "اوبن اي": "OpenAI", "شات جي بي تي": "ChatGPT",
+    
+    # اقتصاد
+    "اقتصاد": "economy", "اقتصادي": "economic",
+    "سعر الدولار": "dollar price", "سعر الذهب": "gold price",
+    "سوق المال": "stock market", "البورصة": "stock exchange",
+    "عملة رقمية": "cryptocurrency", "بتكوين": "Bitcoin",
+    
+    # رياضة
+    "رياضة": "sports", "كرة القدم": "football", "كأس العالم": "world cup",
+    "الدوري": "league", "هدف": "goal",
+    
+    # تعليم
+    "تعليم": "education", "جامعة": "university", "مدرسة": "school",
+    "منحة": "scholarship", "دراسة": "study",
+    
+    # صحة
+    "صحة": "health", "طب": "medicine", "مرض": "disease",
+    "علاج": "treatment", "لقاح": "vaccine",
+    
+    # سياسة
+    "سياسة": "politics", "رئيس": "president", "حكومة": "government",
+    "انتخابات": "elections", "وزير": "minister",
+    
+    # حاسوب
+    "برمجة": "programming", "موقع": "website", "تطبيق": "app application",
+    "هاتف": "phone", "موبايل": "mobile", "كمبيوتر": "computer",
+    "لابتوب": "laptop", "انترنت": "internet",
+    
+    # كلمات استفهام شائعة
+    "ايه": "what", "مين": "who", "فين": "where", "امتى": "when",
+    "ليه": "why", "ازاي": "how",
+    
+    # كلمات عامة
+    "حصل": "happened", "احدث": "latest", "جديد": "new",
+    "مهم": "important", "افضل": "best", "احسن": "best",
+    "تقرير": "report", "تحليل": "analysis",
+}
+
+
+def _quick_translate_arabic_query(query: str) -> str:
+    """ترجمة سريعة لاستعلام البحث العربي للإنجليزي باستخدام قاموس محلي
+    
+    ⚡ ده بيشتغل فوري بدل ما نعمل AI call (بتاخد 2-5 ثواني)
+    بيشوف الكلمات العربية في الاستعلام ويبدلها بالإنجليزي
+    
+    Returns:
+        English translated query, or original query if no translation found
+    """
+    import re
+    
+    # لو الاستعلام أصلاً إنجليزي خالص
+    if not re.search(r'[\u0600-\u06FF]', query):
+        return query
+    
+    words = query.split()
+    translated_words = []
+    any_translated = False
+    
+    for word in words:
+        # تنظيف الكلمة من التشكيل
+        clean_word = re.sub(r'[\u064B-\u065F\u0670]', '', word)
+        clean_lower = clean_word.lower()
+        
+        if clean_lower in _AR_EN_DICTIONARY:
+            translated_words.append(_AR_EN_DICTIONARY[clean_lower])
+            any_translated = True
+        elif word in _AR_EN_DICTIONARY:
+            translated_words.append(_AR_EN_DICTIONARY[word])
+            any_translated = True
+        else:
+            translated_words.append(word)
+    
+    if any_translated:
+        return " ".join(translated_words)
+    
+    return query
+
+
+# ═══════════════════════════════════════
 # DuckDuckGo Search (fallback مجاني)
 # ═══════════════════════════════════════
 
@@ -221,17 +322,27 @@ def _search_web_sync(query: str, max_results: int = 5, language: str = "ar") -> 
             logger.info(f"✅ DuckDuckGo search for '{query}': found {len(results)} results")
 
             # 🔴 FIX: لو اللغة عربي والنتائج قليلة، نجرب بحث بالإنجليزي كمان عشان نغطي أكتر
+            # ⚡ بنستخدم قاموس محلي بدل AI call — أسرع بكتير
             if language == "ar" and len(results) < max_results and attempt == 0:
-                # ترجمة الاستعلام للإنجليزي عشان نجيب نتائج أكتر
-                try:
-                    from provider_manager import call_ai_sync
-                    en_query = call_ai_sync(
-                        f"Translate this Arabic search query to English (just the translation, nothing else): {query}",
-                        task_type="simple", max_tokens=100, temperature=0.1
-                    )
-                    if en_query and en_query.strip():
-                        en_query = en_query.strip().strip('"').strip("'")
-                        logger.info(f"🔍 Also searching in English: {en_query}")
+                # ترجمة الاستعلام للإنجليزي باستخدام القاموس المحلي أولاً
+                en_query = _quick_translate_arabic_query(query)
+                
+                # لو القاموس المحلي مش كفايه، نجرب AI (fallback بس)
+                if not en_query or en_query == query:
+                    try:
+                        from provider_manager import call_ai_sync
+                        ai_en_query = call_ai_sync(
+                            f"Translate this Arabic search query to English (just the translation, nothing else): {query}",
+                            task_type="simple", max_tokens=100, temperature=0.1
+                        )
+                        if ai_en_query and ai_en_query.strip():
+                            en_query = ai_en_query.strip().strip('"').strip("'")
+                    except Exception as e:
+                        logger.debug(f"AI English search fallback failed: {e}")
+                
+                if en_query and en_query != query:
+                    logger.info(f"🔍 Also searching in English: {en_query}")
+                    try:
                         with DDGS() as ddgs:
                             en_results = list(ddgs.text(en_query, max_results=max_results))
                             for r in en_results:
@@ -240,8 +351,8 @@ def _search_web_sync(query: str, max_results: int = 5, language: str = "ar") -> 
                                     "link": r.get("href", ""),
                                     "snippet": r.get("body", ""),
                                 })
-                except Exception as e:
-                    logger.debug(f"English search fallback failed: {e}")
+                    except Exception as e:
+                        logger.debug(f"English DuckDuckGo search failed: {e}")
 
                 # إزالة التكرار
                 seen_links = set()
