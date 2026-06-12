@@ -16,7 +16,7 @@ from memory import (
     save_conversation, save_learning, detect_interests,
 )
 from formatters import clean_ai_response, smart_split_message
-from progress import ProgressManager, AI_STAGES, LEARN_STAGES, ROADMAP_STAGES, YOUTUBE_STAGES
+from progress import ProgressManager, YOUTUBE_STAGES, TelegramThinkingFeedback
 from dashboard import track_event
 
 from handlers.keyboards import (
@@ -212,13 +212,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "md": "Markdown", "csv": "CSV", "json": "JSON",
     }.get(ext, ext.upper())
 
-    stages = AI_STAGES(lang)
-    title = f"تحليل {file_type_label}: {filename}" if lang == "ar" else f"Analyzing {file_type_label}: {filename}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
 
         # Download file with explicit timeout
         try:
@@ -234,22 +231,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ File downloaded: {len(file_bytes)} bytes")
         except asyncio.TimeoutError:
             logger.error(f"❌ File download timed out: {filename}")
-            await progress.error(
-                "❌ انتهى وقت تحميل الملف. جرب تاني." if lang == "ar"
-                else "❌ File download timed out. Please try again."
-            )
+            await feedback.error()
+            await update.message.reply_text("❌ انتهى وقت تحميل الملف. جرب تاني." if lang == "ar" else "❌ File download timed out. Please try again.")
             return
         except Exception as e:
             logger.error(f"❌ Failed to download file: {e}")
-            await progress.error(
-                "❌ فشل تحميل الملف. جرب تاني." if lang == "ar"
-                else "❌ Failed to download file. Please try again."
-            )
+            await feedback.error()
+            await update.message.reply_text("❌ فشل تحميل الملف. جرب تاني." if lang == "ar" else "❌ Failed to download file. Please try again.")
             return
 
-        await progress.update_stage(1)
 
-        # Extract text with progress indication
+        # Extract text
         logger.info(f"🔍 Extracting text from {filename}...")
         try:
             text = await asyncio.wait_for(
@@ -258,22 +250,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except asyncio.TimeoutError:
             logger.error(f"❌ Text extraction timed out for {filename}")
-            await progress.error(
-                "❌ استخراج النص اخد وقت طويل. الملف ممكن يكون كبير أو معقد. جرب ملف أصغر." if lang == "ar"
-                else "❌ Text extraction took too long. The file might be too large or complex. Try a smaller file."
-            )
+            await feedback.error()
+            await update.message.reply_text("❌ استخراج النص اخد وقت طويل. الملف ممكن يكون كبير أو معقد. جرب ملف أصغر." if lang == "ar" else "❌ Text extraction took too long. The file might be too large or complex. Try a smaller file.")
             return
 
         if not text.strip():
             logger.error(f"❌ No text extracted from {filename} — file may be image-only or protected")
-            await progress.error(
-                f"❌ لم أتمكن من استخراج النص من الملف.\n\n💡 ممكن الملف محمي أو فيه صور بس.\nجرب تبعتلي محتوى الملف كنص وهلخصهولك!" if lang == "ar"
-                else "❌ Couldn't extract text from the file.\n\n💡 The file might be protected or contain only images.\nTry sending the content as text and I'll summarize it!"
-            )
+            await feedback.error()
+            await update.message.reply_text("❌ لم أتمكن من استخراج النص من الملف.\n\n💡 ممكن الملف محمي أو فيه صور بس.\nجرب تبعتلي محتوى الملف كنص وهلخصهولك!" if lang == "ar" else "❌ Couldn't extract text from the file.\n\n💡 The file might be protected or contain only images.\nTry sending the content as text and I'll summarize it!")
             return
 
         logger.info(f"✅ Extracted {len(text)} chars from {filename}")
-        await progress.update_stage(2)
 
         # Store context for callback buttons
         # 🔴 FIX: تخزين السياق في الذاكرة + الداتابيز عشان يفضل موجود حتى بعد الـ restart
@@ -366,16 +353,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         inline_keyboard = get_pdf_inline_buttons(lang)
 
+        await feedback.success()
         if len(full_message) > 4000:
             chunks = smart_split_message(full_message)
-            await progress.complete(delete_progress=True)
             for i, chunk in enumerate(chunks):
                 if i == len(chunks) - 1:
-                    await update.message.reply_text(chunk, parse_mode="HTML", reply_markup=inline_keyboard)
+                    await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
                 else:
-                    await update.message.reply_text(chunk, parse_mode="HTML")
+                    await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=full_message, reply_markup=inline_keyboard, delete_progress=False)
+            await update.message.reply_text(full_message, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
 
         # Save to memory
         try:
@@ -391,13 +378,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         try:
-            await progress.error("حدث خطأ في تحليل الملف. جرب تاني." if lang == "ar" else "Error analyzing file. Please try again.")
+            await feedback.error()
         except Exception:
-            # لو حتى الـ progress error فشل، ابعت رسالة عادية
-            try:
-                await update.message.reply_text("❌ حصل خطأ في تحليل الملف. جرب تاني." if lang == "ar" else "❌ Error analyzing file. Please try again.")
-            except Exception:
-                pass
+            pass
+        await update.message.reply_text("❌ حصل خطأ في تحليل الملف. جرب تاني." if lang == "ar" else "❌ Error analyzing file. Please try again.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -439,15 +423,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     try:
-        # 🔴 FIX: إضافة Progress system عشان المستخدم يشوف إن البوت بيحلل
-        from progress import ProgressManager, AI_STAGES
-        stages = AI_STAGES(lang)
-        title = "تحليل الصورة" if lang == "ar" else "Analyzing Image"
-        progress = ProgressManager(update, context, stages, lang, title)
-        await progress.start()
-
-        await progress.update_stage(0)
-        await progress.update_stage(1)
+        feedback = TelegramThinkingFeedback(update, context)
+        await feedback.start()
 
         photo_file = await context.bot.get_file(photo.file_id)
         image_bytes = await photo_file.download_as_bytearray()
@@ -487,7 +464,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await progress.update_stage(2)
 
         # 🔴 إضافة header للتحليل العام
         if lang == "ar":
@@ -498,16 +474,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full_response = header + response
         inline_keyboard = get_image_inline_buttons(lang)
 
+        await feedback.success()
         if len(full_response) > 4000:
-            await progress.complete(delete_progress=True)
             chunks = smart_split_message(full_response)
             for i, chunk in enumerate(chunks):
                 if i == len(chunks) - 1:
-                    await update.message.reply_text(chunk, parse_mode="HTML", reply_markup=inline_keyboard)
+                    await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
                 else:
-                    await update.message.reply_text(chunk, parse_mode="HTML")
+                    await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=full_response, reply_markup=inline_keyboard, delete_progress=False)
+            await update.message.reply_text(full_response, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
 
     except Exception as e:
         logger.error(f"Error in handle_photo: {e}")
@@ -515,6 +491,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             track_event("total_errors")
         except Exception:
             pass
+        await feedback.error()
         if lang == "ar":
             await update.message.reply_text("❌ حصل خطأ في تحليل الصورة. جرب تاني.")
         else:
@@ -590,32 +567,27 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             increment_usage(user_id, "ai_messages")
 
-            stages = AI_STAGES(lang)
-            title = "التفكير" if lang == "ar" else "Thinking"
-            progress = ProgressManager(update, context, stages, lang, title)
-            await progress.start()
+            feedback = TelegramThinkingFeedback(update, context)
+            await feedback.start()
 
             try:
-                await progress.update_stage(0)
-                await progress.update_stage(1)
-
                 from ai_engine import smart_chat
                 detect_interests(user_id, transcribed_text)
                 response = await smart_chat(transcribed_text, lang, user_id=user_id, username=update.effective_user.username)
                 response = clean_ai_response(response)
-                await progress.update_stage(2)
 
+                await feedback.success()
                 if len(response) > 4000:
                     chunks = smart_split_message(response)
-                    await progress.complete(delete_progress=True)
                     for chunk in chunks:
                         await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
                 else:
-                    await progress.complete(final_message=response, delete_progress=False)
+                    await update.message.reply_text(response, parse_mode="HTML", disable_web_page_preview=True)
 
             except Exception as e:
                 logger.error(f"Error processing transcribed voice: {e}")
-                await progress.error("حدث خطأ أثناء المعالجة" if lang == "ar" else "Error processing your message")
+                await feedback.error()
+                await update.message.reply_text("حدث خطأ أثناء المعالجة" if lang == "ar" else "Error processing your message")
 
         else:
             # رسالة خطأ أوضح حسب سبب الفشل
@@ -713,17 +685,12 @@ async def study_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    stages = LEARN_STAGES(lang)
-    title = f"دراسة: {topic}" if lang == "ar" else f"Studying: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         explanation = await study_agent.explain_lesson(topic, language=lang, user_id=user_id)
         explanation = clean_ai_response(explanation)
-        await progress.update_stage(2)
 
         try:
             save_learning(user_id, topic, "studied")
@@ -732,20 +699,21 @@ async def study_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         # 🔴 FIX: لو الرسالة طويلة أكتر من 4000 حرف، نبعتهأ جزئين
+        await feedback.success()
         if len(explanation) > 4000:
-            await progress.complete(delete_progress=True)
             chunks = smart_split_message(explanation)
             for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
+                await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=explanation, delete_progress=False)
+            await update.message.reply_text(explanation, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /study: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -782,32 +750,28 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    stages = AI_STAGES(lang)
-    title = f"كويز: {topic}" if lang == "ar" else f"Quiz: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         quiz = await study_agent.generate_quiz(topic, language=lang, user_id=user_id)
         quiz = clean_ai_response(quiz)
-        await progress.update_stage(2)
         # 🔴 FIX: لو الرسالة طويلة أكتر من 4000 حرف، نبعتهأ جزئين
+        await feedback.success()
         if len(quiz) > 4000:
-            await progress.complete(delete_progress=True)
             chunks = smart_split_message(quiz)
             for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
+                await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=quiz, delete_progress=False)
+            await update.message.reply_text(quiz, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /quiz: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def exam_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -844,32 +808,28 @@ async def exam_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    stages = AI_STAGES(lang)
-    title = f"امتحان: {topic}" if lang == "ar" else f"Exam: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         exam = await study_agent.generate_exam(topic, language=lang, user_id=user_id)
         exam = clean_ai_response(exam)
-        await progress.update_stage(2)
         # 🔴 FIX: لو الرسالة طويلة أكتر من 4000 حرف، نبعتهأ جزئين
+        await feedback.success()
         if len(exam) > 4000:
-            await progress.complete(delete_progress=True)
             chunks = smart_split_message(exam)
             for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
+                await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=exam, delete_progress=False)
+            await update.message.reply_text(exam, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /exam: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def studyplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -906,29 +866,25 @@ async def studyplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    stages = ROADMAP_STAGES(lang)
-    title = f"خطة دراسية: {topic}" if lang == "ar" else f"Study Plan: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         plan = await study_agent.create_study_plan(topic, language=lang, user_id=user_id)
         plan = clean_ai_response(plan)
-        await progress.update_stage(2)
         # 🔴 FIX: لو الرسالة طويلة أكتر من 4000 حرف، نبعتهأ جزئين
+        await feedback.success()
         if len(plan) > 4000:
-            await progress.complete(delete_progress=True)
             chunks = smart_split_message(plan)
             for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode="HTML")
+                await update.message.reply_text(chunk, parse_mode="HTML", disable_web_page_preview=True)
         else:
-            await progress.complete(final_message=plan, delete_progress=False)
+            await update.message.reply_text(plan, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /plan (study): {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")

@@ -19,7 +19,7 @@ from memory import (
     save_conversation, detect_interests, set_news_time,
 )
 from formatters import clean_ai_response, smart_split_message
-from progress import ProgressManager, AI_STAGES
+from progress import ProgressManager, AI_STAGES, TelegramThinkingFeedback
 from premium import (
     check_limit, increment_usage, premium_required_message,
     get_premium_keyboard,
@@ -321,20 +321,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if study_agent:
                     stages = AI_STAGES(lang)
                     title = f"دراسة: {topic}" if lang == "ar" else f"Studying: {topic}"
-                    progress = ProgressManager(update, context, stages, lang, title)
-                    await progress.start()
+                    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+                    feedback = TelegramThinkingFeedback(update, context)
+                    await feedback.start()
                     
                     try:
-                        await progress.update_stage(0)
-                        await progress.update_stage(1)
-                        
                         # 🔴 FIX: إضافة timeout للـ AI call
                         explanation = await asyncio.wait_for(
                             study_agent.explain_lesson(topic, language=lang, user_id=user_id),
                             timeout=120  # أقصى وقت 2 دقيقة
                         )
                         explanation = clean_ai_response(explanation)
-                        await progress.update_stage(2)
                         
                         # حفظ رد البوت
                         try:
@@ -349,7 +346,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         except Exception:
                             pass
                         
-                        await _safe_send_with_progress(update, context, explanation, lang, progress)
+                        await feedback.success()
+                        await _safe_send_with_progress(update, context, explanation, lang, progress=None)
                         
                         # المستخدم يقدر يكمل سؤال في وضع الدراسة
                         if lang == "ar":
@@ -360,7 +358,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                     except asyncio.TimeoutError:
                         logger.error(f"⏰ Study mode AI timed out for: {topic}")
-                        await progress.error("⏰ استغرق الشرح وقت طويل. جرب تاني!" if lang == "ar" else "⏰ Explanation timed out. Please try again!")
+                        await feedback.error()
+                        await update.message.reply_text("⏰ استغرق الشرح وقت طويل. جرب تاني!" if lang == "ar" else "⏰ Explanation timed out. Please try again!")
                         try:
                             track_event("total_errors")
                         except Exception:
@@ -371,7 +370,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             track_event("total_errors")
                         except Exception:
                             pass
-                        await progress.error("❌ حصل خطأ في الشرح. جرب تاني!" if lang == "ar" else "❌ Error explaining. Please try again!")
+                        await feedback.error()
+                        await update.message.reply_text("❌ حصل خطأ في الشرح. جرب تاني!" if lang == "ar" else "❌ Error explaining. Please try again!")
                 else:
                     # fallback للـ AI العادي
                     clear_workflow(user_id)
@@ -411,20 +411,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 stages = AI_STAGES(lang)
                 title = "وضع الدراسة" if lang == "ar" else "Study Mode"
-                progress = ProgressManager(update, context, stages, lang, title)
-                await progress.start()
+                # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+                feedback = TelegramThinkingFeedback(update, context)
+                await feedback.start()
                 
                 try:
-                    await progress.update_stage(0)
-                    await progress.update_stage(1)
-                    
                     # 🔴 FIX: إضافة timeout
                     response = await asyncio.wait_for(
                         smart_chat(contextual_message, lang, user_id=user_id, username=update.effective_user.username),
                         timeout=120
                     )
                     response = clean_ai_response(response)
-                    await progress.update_stage(2)
                     
                     # حفظ رد البوت
                     try:
@@ -440,7 +437,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         except Exception:
                             pass
                     
-                    await _safe_send_with_progress(update, context, response, lang, progress)
+                    await feedback.success()
+                    await _safe_send_with_progress(update, context, response, lang, progress=None)
                     
                     # تذكير إنه في وضع الدراسة
                     if lang == "ar":
@@ -451,10 +449,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                 except asyncio.TimeoutError:
                     logger.error(f"⏰ Study mode chat timed out for user {user_id}")
-                    await progress.error("⏰ الرد استغرق وقت طويل. جرب تاني!" if lang == "ar" else "⏰ Response timed out. Please try again!")
+                    await feedback.error()
+                    await update.message.reply_text("⏰ الرد استغرق وقت طويل. جرب تاني!" if lang == "ar" else "⏰ Response timed out. Please try again!")
                 except Exception as e:
                     logger.error(f"Error in study_mode active chat: {e}")
-                    await progress.error("❌ حصل خطأ. جرب تاني!" if lang == "ar" else "❌ Error occurred. Please try again!")
+                    await feedback.error()
+                    await update.message.reply_text("❌ حصل خطأ. جرب تاني!" if lang == "ar" else "❌ Error occurred. Please try again!")
                 
                 return  # لا تكمل — الرسالة اتعالجت
         
@@ -990,13 +990,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stages = AI_STAGES(lang)
     title = "التفكير" if lang == "ar" else "Thinking"
-    progress = ProgressManager(update, context, stages, lang, title, timeout=180)  # 🔴 FIX: timeout 3 دقائق
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة (💭 → ✅)
+    # أسرع من ProgressManager — مش بيستهلك API calls في edit رسائل
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
-
         # 🔴 FIX (Problem 3): إضافة timeout صريح للـ AI call
         # لو الـ AI استغرق أكتر من 120 ثانية، نبعت رسالة خطأ بدل ما يعلق
         try:
@@ -1015,14 +1014,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 track_event("total_errors")
             except Exception:
                 pass
-            await progress.error(
+            await feedback.error()
+            await update.message.reply_text(
                 "⏰ استغرق الرد وقت طويل. جرب تاني أو اختصر سؤالك!" if lang == "ar"
                 else "⏰ Response took too long. Please try again or simplify your question!"
             )
             return
 
         response = clean_ai_response(response)
-        await progress.update_stage(2)
 
         # 🔴 NOTE: رد البوت بيتحفظ جوا smart_chat() تلقائي — مش محتاجين نحفظه تاني
 
@@ -1034,8 +1033,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.debug(f"Auto-save memory error (non-critical): {e}")
 
-        # 🔴 FIX (Problem 3): إرسال آمن مع retry + تقسيم
-        await _safe_send_with_progress(update, context, response, lang, progress)
+        # 🟢 FIX: إرسال آمن مع retry + تقسيم (بدون progress bar — أسرع)
+        await feedback.success()
+        await _safe_send_with_progress(update, context, response, lang, progress=None)
 
     except Exception as e:
         logger.error(f"Error in handle_message: {e}", exc_info=True)
@@ -1044,10 +1044,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         try:
-            await progress.error("مش فاهم رسالتك كويس. ممكن تكتبها بطريقة تانية؟" if lang == "ar" else "I didn't understand your message. Could you rephrase it?")
+            await feedback.error()
+            await update.message.reply_text("❌ حصل خطأ. جرب تاني!" if lang == "ar" else "❌ Error occurred. Please try again.")
         except Exception:
-            # لو حتى الـ progress error فشل
-            try:
-                await update.message.reply_text("❌ حصل خطأ. جرب تاني!" if lang == "ar" else "❌ Error occurred. Please try again.")
-            except Exception:
-                pass
+            pass

@@ -1351,19 +1351,15 @@ async def _show_quality_selection_for_search(wa_id: str, url: str, title: str,
     display_title = title[:50] if title else "فيديو"
     body = f"📥 *اختار الجودة*\n\n📺 {display_title}\n🔗 المنصة: {platform_display}"
     
-    # 🔴 لو البحث كان صوت → نحط خيار الصوت كأول اختيار في القائمة
+    # 🔴 لو البحث كان صوت → نحط خيارات الصوت بس (مفيش فيديو — المستخدم طلب صوت)
     if search_type == "audio":
         sections = [{
-            "title": "🎵 صوت فقط",
+            "title": "🎵 جودة الصوت",
             "rows": [
-                {"id": f"dl_a_{url_key}", "title": "🎵 صوت بس MP3", "description": "استخراج الصوت فقط - الأسرع"},
-            ],
-        }, {
-            "title": "🎬 جودة الفيديو",
-            "rows": [
-                {"id": f"dl_v_b_{url_key}", "title": "🎬 أعلى جودة", "description": "1080p - أفضل جودة متاحة"},
-                {"id": f"dl_v_m_{url_key}", "title": "📹 جودة متوسطة", "description": "720p - توازن بين الجودة والحجم"},
-                {"id": f"dl_v_l_{url_key}", "title": "📱 جودة منخفضة", "description": "480p - حجم صغير"},
+                {"id": f"dl_aq_320_{url_key}", "title": "🎧 320kbps", "description": "أعلى جودة صوت - وضوح ممتاز"},
+                {"id": f"dl_aq_192_{url_key}", "title": "🎵 192kbps", "description": "جودة عالية - توازن مثالي"},
+                {"id": f"dl_aq_128_{url_key}", "title": "🎶 128kbps", "description": "جودة متوسطة - حجم أقل"},
+                {"id": f"dl_aq_64_{url_key}", "title": "📻 64kbps", "description": "جودة منخفضة - حجم صغير جداً"},
             ],
         }]
     else:
@@ -1580,7 +1576,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
             # WhatsApp limit: ~100MB for media
             
             # Quality format strings (like Telegram's download_handlers)
-            is_audio_only = (quality == "audio")
+            is_audio_only = (quality == "audio" or quality.startswith("audio_"))
             
             # 🔴 FIX v9: Facebook family format + acodec!=none + no filesize limit
             is_facebook_family = platform in ("facebook", "instagram", "threads")
@@ -1680,10 +1676,15 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
             
             # Audio-only: extract to MP3
             if is_audio_only:
+                # 🔴 FIX: استخدام الـ bitrate المحدد من جودة الصوت
+                audio_bitrate = '192'
+                if quality.startswith("audio_"):
+                    try: audio_bitrate = quality.split("_")[1]
+                    except: pass
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredquality': audio_bitrate,
                 }]
             
             # ═══ إضافة كوكيز + إعدادات YouTube المحسّنة ═══
@@ -1843,7 +1844,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             inv_size_mb = inv_size / (1024 * 1024)
                             inv_quality_label = inv_format.get("quality_label", quality)
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(target, 'rb') as af:
                                         media_response = requests.post(
@@ -1969,7 +1970,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             piped_size_mb = piped_size / (1024 * 1024)
                             piped_quality_label = piped_format.get("quality_label", quality)
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(target, 'rb') as af:
                                         media_response = requests.post(
@@ -2142,7 +2143,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             except Exception:
                                 pass  # Fail-open
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(cobalt_file, 'rb') as af:
                                         media_response = requests.post(
@@ -2258,7 +2259,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             except Exception:
                                 pass  # Fail-open
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(apify_file, 'rb') as af:
                                         media_response = requests.post(
@@ -2399,7 +2400,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             piped_size_mb = piped_size / (1024 * 1024)
                             piped_quality_label = piped_format.get("quality_label", quality)
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(target, 'rb') as af:
                                         media_response = requests.post(
@@ -2532,7 +2533,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                             inv_size_mb = inv_size / (1024 * 1024)
                             inv_quality_label = inv_format.get("quality_label", quality)
                             
-                            if is_audio_only or quality == "audio":
+                            if is_audio_only or quality == "audio" or quality.startswith("audio_"):
                                 try:
                                     with open(target, 'rb') as af:
                                         media_response = requests.post(
@@ -2616,7 +2617,7 @@ async def _download_and_send_video(wa_id: str, url: str, wa_user_id: int,
                         import aiohttp as _aiohttp_wa
                         import json as _json_wa
                         
-                        is_audio_jwt = (quality == "audio")
+                        is_audio_jwt = (quality == "audio" or quality.startswith("audio_"))
                         jwt_quality_map = {"best": "1080", "medium": "720", "low": "480", "audio": "720"}
                         jwt_v_quality = jwt_quality_map.get(quality, "1080")
                         
@@ -5245,7 +5246,7 @@ async def _handle_incoming_message(message: dict, value: dict):
 
         # ═══ Handle Interactive Button/List Replies ═══
         if interactive_id:
-            # Check for download quality selections first (dl_v_b_KEY, dl_v_m_KEY, etc.)
+            # Check for download quality selections first (dl_v_b_KEY, dl_v_m_KEY, dl_aq_320_KEY, etc.)
             if interactive_id.startswith("dl_"):
                 quality_map = {
                     "dl_v_b_": "best",
@@ -5253,6 +5254,25 @@ async def _handle_incoming_message(message: dict, value: dict):
                     "dl_v_l_": "low",
                     "dl_a_": "audio",
                 }
+                # 🔴 Audio quality with specific bitrate: dl_aq_{bitrate}_{key}
+                audio_quality = None
+                if interactive_id.startswith("dl_aq_"):
+                    # dl_aq_320_abc123 → quality="audio_320", url_key="abc123"
+                    aq_parts = interactive_id.split("_", 3)  # dl, aq, 320, abc123
+                    if len(aq_parts) >= 4:
+                        bitrate = aq_parts[2]
+                        audio_quality = f"audio_{bitrate}"
+                        url_key = aq_parts[3]
+                
+                if audio_quality:
+                    cached_url = _get_url(url_key)
+                    if cached_url:
+                        logger.info(f"📥 Audio quality selection: {audio_quality} for URL key {url_key}")
+                        await _download_and_send_video(wa_id, cached_url, wa_user_id, contact_name, message_id, is_admin, quality=audio_quality)
+                    else:
+                        await _send_whatsapp_message(wa_id, "⚠️ انتهت صلاحية الرابط. ابعت الرابط تاني! 📥")
+                    return
+                
                 for prefix, q in quality_map.items():
                     if interactive_id.startswith(prefix):
                         url_key = interactive_id[len(prefix):]

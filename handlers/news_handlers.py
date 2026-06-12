@@ -19,7 +19,7 @@ from news_fetcher import fetch_news
 from filters import filter_news
 from scorer import rank_articles
 from summarizer import summarize_articles
-from progress import ProgressManager, NEWS_STAGES, SEARCH_STAGES
+from progress import ProgressManager, NEWS_STAGES, SEARCH_STAGES, TelegramThinkingFeedback
 from dashboard import track_event
 
 from handlers.keyboards import get_news_inline_buttons, get_trending_inline_buttons

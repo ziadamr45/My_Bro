@@ -46,6 +46,27 @@ from content_safety import (
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════
+# 🔴 Helper: Audio Quality Detection
+# quality = "audio" → default audio (192kbps)
+# quality = "audio_320", "audio_192", "audio_128", "audio_64" → audio with specific bitrate
+# ═══════════════════════════════════════
+
+def _is_audio_quality(quality: str) -> bool:
+    """هل الجودة دي صوت بس (مش فيديو)"""
+    return quality == "audio" or quality.startswith("audio_")
+
+def _get_audio_bitrate(quality: str) -> int:
+    """استخراج الـ bitrate من جودة الصوت — 192 كـ default"""
+    if quality.startswith("audio_"):
+        try:
+            return int(quality.split("_")[1])
+        except (ValueError, IndexError):
+            return 192
+    return 192  # default for plain "audio"
+
+
 # ═══════════════════════════════════════
 # ملف Cookies — الحل الأقوى لتخطي Bot Detection
 # ═══════════════════════════════════════
@@ -1141,6 +1162,40 @@ def _get_quality_keyboard(url: str, lang: str = "ar") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def _get_audio_quality_keyboard(url: str, lang: str = "ar") -> InlineKeyboardMarkup:
+    """أزرار اختيار جودة الصوت فقط — لما المستخدم يطلب /audio
+    
+    🔴 الفرق عن _get_quality_keyboard:
+    - بيظهر خيارات جودة الصوت بس (320kbps, 192kbps, 128kbps, 64kbps)
+    - مفيش خيارات فيديو — المستخدم طلب صوت أصلاً
+    - callback data: dl_aq_{bitrate}_{url_key}
+    """
+    url_key = _store_url(url)
+    if lang == "ar":
+        keyboard = [
+            [
+                InlineKeyboardButton("🎧 320kbps", callback_data=f"dl_aq_320_{url_key}"),
+                InlineKeyboardButton("🎵 192kbps", callback_data=f"dl_aq_192_{url_key}"),
+            ],
+            [
+                InlineKeyboardButton("🎶 128kbps", callback_data=f"dl_aq_128_{url_key}"),
+                InlineKeyboardButton("📻 64kbps", callback_data=f"dl_aq_64_{url_key}"),
+            ],
+        ]
+    else:
+        keyboard = [
+            [
+                InlineKeyboardButton("🎧 320kbps", callback_data=f"dl_aq_320_{url_key}"),
+                InlineKeyboardButton("🎵 192kbps", callback_data=f"dl_aq_192_{url_key}"),
+            ],
+            [
+                InlineKeyboardButton("🎶 128kbps", callback_data=f"dl_aq_128_{url_key}"),
+                InlineKeyboardButton("📻 64kbps", callback_data=f"dl_aq_64_{url_key}"),
+            ],
+        ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 # ═══════════════════════════════════════
 # أوامر التحميل
 # ═══════════════════════════════════════
@@ -1390,7 +1445,7 @@ async def _try_cobalt_for_youtube(url: str, quality: str, tmpdir: str) -> dict |
     }
     v_quality = quality_map.get(quality, "720")
     
-    is_audio = quality == "audio"
+    is_audio = _is_audio_quality(quality)
     
     # ═══ محاولة 1: Self-Hosted Cobalt (COBALT_API_URL) ═══
     # لو عندنا سيرفر Cobalt شغال — ده الأضمن
@@ -1623,7 +1678,7 @@ async def _try_cobalt_download(url: str, quality: str, tmpdir: str) -> dict | No
     }
     cobalt_quality = quality_map.get(quality, "1080")
     
-    is_audio = quality == "audio"
+    is_audio = _is_audio_quality(quality)
     
     payload = {
         "url": url,
@@ -1875,7 +1930,7 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
         common_opts['extractor_args'] = {'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'}}
     
     # 🔴 FIX v4: إعدادات حسب نوع المحتوى
-    if quality == "audio":
+    if _is_audio_quality(quality):
         if ffmpeg_ok:
             opts = {
                 **common_opts,
@@ -1883,7 +1938,7 @@ def _get_ydl_opts(quality: str, output_template: str, platform: str = "",
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredquality': str(_get_audio_bitrate(quality)),
                 }],
             }
         else:
@@ -2126,7 +2181,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         output_template = os.path.join(tmpdir, "%(title).100s.%(ext)s")
         
         # تحديث رسالة الحالة
-        if quality == "audio":
+        if _is_audio_quality(quality):
             status_text = "🎵 جاري تحميل الصوت..." if lang == "ar" else "🎵 Downloading audio..."
         else:
             quality_names = {"best": "عالية", "medium": "متوسطة", "low": "منخفضة"} if lang == "ar" else {"best": "high", "medium": "medium", "low": "low"}
@@ -2252,8 +2307,9 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
             try:
                 from invidious_api import download_youtube_invidious_file
                 
-                inv_quality_map = {"best": "best", "medium": "medium", "low": "low", "audio": "audio"}
-                inv_quality = inv_quality_map.get(quality, "best")
+                inv_quality_map = {"best": "best", "medium": "medium", "low": "low", "audio": "audio",
+                                    "audio_320": "audio", "audio_192": "audio", "audio_128": "audio", "audio_64": "audio"}
+                inv_quality = inv_quality_map.get(quality, "audio" if _is_audio_quality(quality) else "best")
                 
                 logger.info(f"🟣 Invidious (early): Attempting download quality={inv_quality} for {url[:80]}")
                 
@@ -2285,7 +2341,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     quality_label = format_info.get("quality_label", "") or format_info.get("resolution", "")
                     if not quality_label:
-                        if quality == "audio":
+                        if _is_audio_quality(quality):
                             quality_label = "MP3"
                         else:
                             quality_label = f"{inv_quality} quality"
@@ -2295,7 +2351,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     # 🛡️ Safety check
                     try:
-                        inv_file_type = "audio" if quality == "audio" else "video"
+                        inv_file_type = "audio" if _is_audio_quality(quality) else "video"
                         is_safe_inv, block_msg_inv, _reason_inv = await comprehensive_media_safety_check(
                             title=real_title, file_path=file_path, file_type=inv_file_type,
                             platform="telegram", user_id=str(user_id), lang=lang,
@@ -2314,7 +2370,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     await status_msg.delete()
                     
-                    if quality == "audio":
+                    if _is_audio_quality(quality):
                         try:
                             with open(file_path, 'rb') as f:
                                 caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {real_title[:200]}\n📁 {size_str} | Invidious"
@@ -2425,7 +2481,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     quality_label = format_info.get("quality_label", "")
                     if not quality_label:
-                        if quality == "audio":
+                        if _is_audio_quality(quality):
                             quality_label = "MP3"
                         else:
                             quality_label = f"{piped_quality} quality"
@@ -2435,7 +2491,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     # 🛡️ Safety check
                     try:
-                        pp_file_type = "audio" if quality == "audio" else "video"
+                        pp_file_type = "audio" if _is_audio_quality(quality) else "video"
                         is_safe_pp, block_msg_pp, _reason_pp = await comprehensive_media_safety_check(
                             title=real_title, file_path=file_path, file_type=pp_file_type,
                             platform="telegram", user_id=str(user_id), lang=lang,
@@ -2454,7 +2510,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     await status_msg.delete()
                     
-                    if quality == "audio":
+                    if _is_audio_quality(quality):
                         try:
                             with open(file_path, 'rb') as f:
                                 caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {real_title[:200]}\n📁 {size_str} | Piped"
@@ -2631,7 +2687,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                             
                             # 🛡️ Safety check on Cobalt downloaded media
                             try:
-                                cb_file_type = "audio" if quality == "audio" else "video"
+                                cb_file_type = "audio" if _is_audio_quality(quality) else "video"
                                 is_safe_cb, block_msg_cb, _reason_cb = await comprehensive_media_safety_check(
                                     title=cb_title, file_path=cb_file_path, file_type=cb_file_type,
                                     platform="telegram", user_id=str(user_id), lang=lang,
@@ -2650,7 +2706,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                             
                             await status_msg.delete()
                             
-                            if quality == "audio":
+                            if _is_audio_quality(quality):
                                 try:
                                     with open(cb_file_path, 'rb') as f:
                                         caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {cb_title[:200]}\n📁 {cb_size_str} | Cobalt"
@@ -2759,7 +2815,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                             
                             # 🛡️ Safety check on Apify downloaded media
                             try:
-                                af_file_type = "audio" if quality == "audio" else "video"
+                                af_file_type = "audio" if _is_audio_quality(quality) else "video"
                                 is_safe_af, block_msg_af, _reason_af = await comprehensive_media_safety_check(
                                     title=af_title, file_path=af_file_path, file_type=af_file_type,
                                     platform="telegram", user_id=str(user_id), lang=lang,
@@ -2778,7 +2834,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                             
                             await status_msg.delete()
                             
-                            if quality == "audio":
+                            if _is_audio_quality(quality):
                                 try:
                                     with open(af_file_path, 'rb') as f:
                                         caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {af_title[:200]}\n📁 {af_size_str} | Apify"
@@ -2908,8 +2964,9 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
             try:
                 from invidious_api import download_youtube_invidious_file
                 
-                inv_quality_map = {"best": "best", "medium": "medium", "low": "low", "audio": "audio"}
-                inv_quality = inv_quality_map.get(quality, "best")
+                inv_quality_map = {"best": "best", "medium": "medium", "low": "low", "audio": "audio",
+                                    "audio_320": "audio", "audio_192": "audio", "audio_128": "audio", "audio_64": "audio"}
+                inv_quality = inv_quality_map.get(quality, "audio" if _is_audio_quality(quality) else "best")
                 
                 logger.info(f"🟣 Invidious: Attempting download quality={inv_quality} for {url[:80]}")
                 
@@ -2941,7 +2998,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     quality_label = format_info.get("quality_label", "") or format_info.get("resolution", "")
                     if not quality_label:
-                        if quality == "audio":
+                        if _is_audio_quality(quality):
                             quality_label = "MP3"
                         else:
                             quality_label = f"{inv_quality} quality"
@@ -2951,7 +3008,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     # 🛡️ Safety check on Invidious downloaded media
                     try:
-                        inv_file_type = "audio" if quality == "audio" else "video"
+                        inv_file_type = "audio" if _is_audio_quality(quality) else "video"
                         is_safe_inv, block_msg_inv, _reason_inv = await comprehensive_media_safety_check(
                             title=real_title, file_path=file_path, file_type=inv_file_type,
                             platform="telegram", user_id=str(user_id), lang=lang,
@@ -2970,7 +3027,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     await status_msg.delete()
                     
-                    if quality == "audio":
+                    if _is_audio_quality(quality):
                         try:
                             with open(file_path, 'rb') as f:
                                 caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {real_title[:200]}\n📁 {size_str} | Invidious"
@@ -3069,7 +3126,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     quality_label = format_info.get("quality_label", "")
                     if not quality_label:
-                        if quality == "audio":
+                        if _is_audio_quality(quality):
                             quality_label = "MP3"
                         else:
                             quality_label = f"{piped_quality} quality"
@@ -3079,7 +3136,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     # 🛡️ Safety check on Piped downloaded media
                     try:
-                        pp_file_type = "audio" if quality == "audio" else "video"
+                        pp_file_type = "audio" if _is_audio_quality(quality) else "video"
                         is_safe_pp, block_msg_pp, _reason_pp = await comprehensive_media_safety_check(
                             title=real_title, file_path=file_path, file_type=pp_file_type,
                             platform="telegram", user_id=str(user_id), lang=lang,
@@ -3098,7 +3155,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     await status_msg.delete()
                     
-                    if quality == "audio":
+                    if _is_audio_quality(quality):
                         try:
                             with open(file_path, 'rb') as f:
                                 caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {real_title[:200]}\n📁 {size_str} | Piped"
@@ -3229,7 +3286,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     
                     jwt_quality_map = {"best": "1080", "medium": "720", "low": "480", "audio": "720"}
                     jwt_quality = jwt_quality_map.get(quality, "720")
-                    is_jwt_audio = quality == "audio"
+                    is_jwt_audio = _is_audio_quality(quality)
                     
                     jwt_headers = {
                         "Accept": "application/json",
@@ -3266,7 +3323,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                         
                         # 🛡️ Safety check on Cobalt JWT downloaded media
                         try:
-                            jwt_file_type = "audio" if quality == "audio" else "video"
+                            jwt_file_type = "audio" if _is_audio_quality(quality) else "video"
                             is_safe_jwt, block_msg_jwt, _reason_jwt = await comprehensive_media_safety_check(
                                 title=video_title, file_path=file_path, file_type=jwt_file_type,
                                 platform="telegram", user_id=str(user_id), lang=lang,
@@ -3285,7 +3342,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                         
                         await status_msg.delete()
                         
-                        if quality == "audio":
+                        if _is_audio_quality(quality):
                             try:
                                 with open(file_path, 'rb') as f:
                                     caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {video_title[:200]}\n📁 {size_str} | Cobalt JWT"
@@ -3367,7 +3424,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     import requests as sync_requests
                     from urllib.parse import quote
                     worker_url = CLOUDFLARE_WORKER_URL.rstrip("/")
-                    dl_type = "audio" if quality == "audio" else "video"
+                    dl_type = "audio" if _is_audio_quality(quality) else "video"
                     api_url = f"{worker_url}/download?url={quote(url)}&type={dl_type}"
                     
                     cf_response = sync_requests.get(api_url, timeout=120, stream=True)
@@ -3375,7 +3432,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                     if cf_response.status_code == 200:
                         content_type = cf_response.headers.get('Content-Type', '')
                         if 'video' in content_type or 'audio' in content_type or 'octet-stream' in content_type:
-                            ext = "mp3" if quality == "audio" else "mp4"
+                            ext = "mp3" if _is_audio_quality(quality) else "mp4"
                             cf_filename = f"youtube_cf.{ext}"
                             cf_filepath = os.path.join(tmpdir, cf_filename)
                             
@@ -3401,7 +3458,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                                 cf_data = cf_response.json()
                                 if cf_data.get("url"):
                                     stream_url = cf_data["url"]
-                                    ext = "mp3" if quality == "audio" else "mp4"
+                                    ext = "mp3" if _is_audio_quality(quality) else "mp4"
                                     cf_filename = f"youtube_cf.{ext}"
                                     cf_filepath = os.path.join(tmpdir, cf_filename)
                                     
@@ -3586,7 +3643,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         
         # 🛡️ Safety check on downloaded media before sending
         try:
-            dl_file_type = "audio" if quality == "audio" else "video"
+            dl_file_type = "audio" if _is_audio_quality(quality) else "video"
             dl_title = info.get("title", filename) if info else filename
             is_safe_dl, block_msg_dl, _reason_dl = await comprehensive_media_safety_check(
                 title=dl_title, file_path=filepath, file_type=dl_file_type,
@@ -3613,7 +3670,7 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
         send_failed = False
         is_too_large = False
         
-        if quality == "audio":
+        if _is_audio_quality(quality):
             try:
                 with open(filepath, 'rb') as f:
                     caption = f"📥 {'تم تحميل الصوت!' if lang == 'ar' else 'Audio downloaded!'}\n🎵 {title[:200]}\n📁 {size_str}"
@@ -3675,8 +3732,8 @@ async def _download_with_ytdlp(update_or_query, url: str, quality: str, lang: st
                 cloud_success = False
                 try:
                     from supabase_storage import upload_and_get_link
-                    content_type = "audio/mpeg" if quality == "audio" else "video/mp4"
-                    ext = ".mp3" if quality == "audio" else ".mp4"
+                    content_type = "audio/mpeg" if _is_audio_quality(quality) else "video/mp4"
+                    ext = ".mp3" if _is_audio_quality(quality) else ".mp4"
                     safe_name = re.sub(r'[^\w\-.]', '_', title[:80]) + ext
                     
                     cloud_msg = await upload_and_get_link(
@@ -3898,6 +3955,13 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
     elif dl_type == "a":
         quality = "audio"
         url_key = parts[2]
+    elif dl_type == "aq":
+        # 🔴 Audio quality selection: dl_aq_{bitrate}_{url_key}
+        # e.g., dl_aq_320_abc123 → audio with 320kbps bitrate
+        if len(parts) < 4: return
+        bitrate = parts[2]  # 320, 192, 128, 64
+        quality = f"audio_{bitrate}"  # e.g., "audio_320"
+        url_key = parts[3]
     else:
         return
     

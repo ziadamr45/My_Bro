@@ -22,7 +22,7 @@ from premium import (
 )
 from dashboard import track_event
 from provider_manager import get_provider_manager
-from progress import ProgressManager, AI_STAGES
+from progress import ProgressManager, AI_STAGES, TelegramThinkingFeedback
 from handlers.dedup import _is_duplicate_update, _is_duplicate_user_message
 
 logger = logging.getLogger(__name__)
@@ -154,13 +154,11 @@ Type your description after the command and I'll create an image!
     # Progress
     stages = AI_STAGES(lang)
     title = "إنشاء صورة" if lang == "ar" else "Generating Image"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
-
         # 🔴 FIX: ترجمة الوصف العربي للإنجليزية قبل الإرسال للنموذج
         original_prompt = prompt
         image_prompt = await _translate_prompt_to_english(prompt, user_id=user_id)
@@ -174,11 +172,10 @@ Type your description after the command and I'll create an image!
             user_id=user_id,
         )
 
-        await progress.update_stage(2)
-
         if not result:
             error_msg = "❌ حصل خطأ في إنشاء الصورة. جرب وصف تاني!" if lang == "ar" else "❌ Error generating image. Try a different description!"
-            await progress.error(error_msg)
+            await feedback.error()
+            await update.message.reply_text(error_msg)
             return
 
         # بناء الـ caption
@@ -188,16 +185,15 @@ Type your description after the command and I'll create an image!
             caption = f"🎨 <b>{'صورتك جاهزه!' if lang == 'ar' else 'Your image is ready!'}</b>\n\n📝 <i>{original_prompt[:200]}</i>"
 
         # إرسال الصورة
+        await feedback.success()
         if result.get("base64"):
             image_bytes = base64.b64decode(result["base64"])
-            await progress.complete(delete_progress=True)
             await update.message.reply_photo(
                 photo=io.BytesIO(image_bytes),
                 caption=caption,
                 parse_mode="HTML",
             )
         elif result.get("url"):
-            await progress.complete(delete_progress=True)
             await update.message.reply_photo(
                 photo=result["url"],
                 caption=caption,
@@ -205,7 +201,7 @@ Type your description after the command and I'll create an image!
             )
         else:
             error_msg = "❌ حصل خطأ في إنشاء الصورة. جرب تاني!" if lang == "ar" else "❌ Error generating image. Please try again!"
-            await progress.error(error_msg)
+            await update.message.reply_text(error_msg)
 
     except Exception as e:
         logger.error(f"Error in /image: {e}")
@@ -214,7 +210,8 @@ Type your description after the command and I'll create an image!
         except Exception:
             pass
         error_msg = "❌ حصل خطأ في إنشاء الصورة. جرب تاني!" if lang == "ar" else "❌ Error generating image. Please try again!"
-        await progress.error(error_msg)
+        await feedback.error()
+        await update.message.reply_text(error_msg)
 
 
 # ═══════════════════════════════════════
@@ -333,13 +330,11 @@ Two ways to use:
     # Progress
     stages = AI_STAGES(lang)
     title = "تعديل الصورة" if lang == "ar" else "Editing Image"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
-
         # ترجمة الوصف العربي للإنجليزية
         original_prompt = prompt
         edit_prompt = await _translate_prompt_to_english(prompt, user_id=user_id)
@@ -353,11 +348,10 @@ Two ways to use:
             user_id=user_id,
         )
 
-        await progress.update_stage(2)
-
         if not result:
             error_msg = "❌ حصل خطأ في تعديل الصورة. جرب وصف تاني!" if lang == "ar" else "❌ Error editing image. Try a different description!"
-            await progress.error(error_msg)
+            await feedback.error()
+            await update.message.reply_text(error_msg)
             return
 
         # بناء الـ caption
@@ -367,16 +361,15 @@ Two ways to use:
             caption = f"🖌️ <b>{'الصورة المعدّلة جاهزه!' if lang == 'ar' else 'Edited image is ready!'}</b>\n\n📝 <i>{original_prompt[:200]}</i>"
 
         # إرسال الصورة المعدّلة
+        await feedback.success()
         if result.get("base64"):
             image_bytes = base64.b64decode(result["base64"])
-            await progress.complete(delete_progress=True)
             await update.message.reply_photo(
                 photo=io.BytesIO(image_bytes),
                 caption=caption,
                 parse_mode="HTML",
             )
         elif result.get("url"):
-            await progress.complete(delete_progress=True)
             await update.message.reply_photo(
                 photo=result["url"],
                 caption=caption,
@@ -384,7 +377,7 @@ Two ways to use:
             )
         else:
             error_msg = "❌ حصل خطأ في تعديل الصورة. جرب تاني!" if lang == "ar" else "❌ Error editing image. Please try again!"
-            await progress.error(error_msg)
+            await update.message.reply_text(error_msg)
 
     except Exception as e:
         logger.error(f"Error in /edit: {e}")
@@ -393,7 +386,8 @@ Two ways to use:
         except Exception:
             pass
         error_msg = "❌ حصل خطأ في تعديل الصورة. جرب تاني!" if lang == "ar" else "❌ Error editing image. Please try again!"
-        await progress.error(error_msg)
+        await feedback.error()
+        await update.message.reply_text(error_msg)
 
 
 async def handle_photo_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):

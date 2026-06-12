@@ -671,13 +671,13 @@ async def handle_search_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)
         
     elif action == "sa":
-        # صوت — نعرض أزرار اختيار الجودة (مع الصوت كأول خيار)
-        from handlers.download_handlers import _get_quality_keyboard, _store_url
+        # صوت — 🔴 FIX: نعرض خيارات جودة الصوت بس (مفيش فيديو — المستخدم طلب صوت)
+        from handlers.download_handlers import _get_audio_quality_keyboard
         
         if lang == "ar":
-            msg = f"🎵 *اختر جودة التحميل*\n\n📺 {title[:100]}"
+            msg = f"🎵 *اختر جودة الصوت*\n\n🎵 {title[:100]}"
         else:
-            msg = f"🎵 *Choose download quality*\n\n📺 {title[:100]}"
+            msg = f"🎵 *Choose audio quality*\n\n🎵 {title[:100]}"
         
-        keyboard = _get_quality_keyboard(url, lang)
+        keyboard = _get_audio_quality_keyboard(url, lang)
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=keyboard)

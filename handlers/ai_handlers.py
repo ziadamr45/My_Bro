@@ -13,7 +13,7 @@ from ai_engine import (
 )
 from memory import get_language, increment_command_count
 from formatters import clean_ai_response, smart_split_message
-from progress import ProgressManager, AI_STAGES, LEARN_STAGES, ROADMAP_STAGES, COMPANY_STAGES, DEEP_SEARCH_STAGES
+from progress import ProgressManager, AI_STAGES, LEARN_STAGES, ROADMAP_STAGES, COMPANY_STAGES, DEEP_SEARCH_STAGES, TelegramThinkingFeedback
 from dashboard import track_event
 
 from handlers.keyboards import get_learn_inline_buttons, get_roadmap_keyboard, get_companies_keyboard
@@ -55,23 +55,23 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stages = AI_STAGES(lang)
     title = "التفكير" if lang == "ar" else "Thinking"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة (💭 → ✅)
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         response = await ask_question(question, lang, user_id=user_id)
         response = clean_ai_response(response)
-        await progress.update_stage(2)
-        await progress.complete(final_message=response, delete_progress=False)
+        await feedback.success()
+        await update.message.reply_text(response, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /ask: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,15 +110,13 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stages = LEARN_STAGES(lang)
     title = f"تعلم: {topic}" if lang == "ar" else f"Learning: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         explanation = await explain_topic(topic, lang, user_id=user_id)
         explanation = clean_ai_response(explanation)
-        await progress.update_stage(2)
 
         try:
             save_learning(user_id, topic, "explored")
@@ -126,15 +124,17 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        await feedback.success()
         inline_keyboard = get_learn_inline_buttons(lang)
-        await progress.complete(final_message=explanation, reply_markup=inline_keyboard, delete_progress=False)
+        await update.message.reply_text(explanation, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
     except Exception as e:
         logger.error(f"Error in /learn: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,24 +171,24 @@ async def roadmap_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stages = ROADMAP_STAGES(lang)
     title = f"خارطة طريق: {topic}" if lang == "ar" else f"Roadmap: {topic}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
         roadmap = await generate_roadmap(topic, lang, user_id=user_id)
         roadmap = clean_ai_response(roadmap)
-        await progress.update_stage(2)
+        await feedback.success()
         inline_keyboard = get_learn_inline_buttons(lang)
-        await progress.complete(final_message=roadmap, reply_markup=inline_keyboard, delete_progress=False)
+        await update.message.reply_text(roadmap, parse_mode="HTML", disable_web_page_preview=True, reply_markup=inline_keyboard)
     except Exception as e:
         logger.error(f"Error in /roadmap: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")
 
 
 async def deepsearch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -319,21 +319,20 @@ async def company_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stages = COMPANY_STAGES(lang)
     title = f"تقرير: {company_name}" if lang == "ar" else f"Report: {company_name}"
-    progress = ProgressManager(update, context, stages, lang, title)
-    await progress.start()
+    # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+    feedback = TelegramThinkingFeedback(update, context)
+    await feedback.start()
 
     try:
-        await progress.update_stage(0)
-        await progress.update_stage(1)
-        await progress.update_stage(2)
         report = await generate_company_report(company_name, lang, user_id=user_id)
         report = clean_ai_response(report)
-        await progress.update_stage(3)
-        await progress.complete(final_message=report, delete_progress=False)
+        await feedback.success()
+        await update.message.reply_text(report, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Error in /company: {e}")
         try:
             track_event("total_errors")
         except Exception:
             pass
-        await progress.error("حدث خطأ" if lang == "ar" else "Error occurred")
+        await feedback.error()
+        await update.message.reply_text("حدث خطأ" if lang == "ar" else "Error occurred")

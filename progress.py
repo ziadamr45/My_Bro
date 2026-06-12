@@ -398,6 +398,102 @@ class ProgressManager:
 
 
 # ═══════════════════════════════════════
+# 🎯 تفاعل سريع - Telegram Thinking Feedback
+# للعمليات السريعة: AI chat, news, search, learn, etc.
+# بدل شريط التقدم — أسرع وأنظف
+# ═══════════════════════════════════════
+
+class TelegramThinkingFeedback:
+    """
+    تفاعل سريع بالـ emoji reactions — زي WhatsApp ThinkingFeedback بالظبط
+    
+    💭 → ✅ (نجاح)
+    💭 → ❌ (خطأ)
+    
+    أسرع من ProgressManager لأنه:
+    1. مش بيعمل رسالة جديدة (مش محتاج reply_text)
+    2. مش بيعمل edit رسالة كل مرحلة
+    3. بيستخدم setMessageReaction بس (1-2 API calls)
+    4. مؤشر كتابة خفيف في الـ background
+    
+    🟢 يستخدم للعمليات السريعة: AI chat, news, search, learn, company, roadmap
+    🔴 لا يستخدم للعمليات الطويلة: YouTube summary, deep search, downloads (دي بتستخدم ProgressManager)
+    """
+    
+    def __init__(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        self.update = update
+        self.context = context
+        self.typing_task = None
+        self._finished = False
+        self._chat_id = update.effective_chat.id if update.effective_chat else None
+        self._message_id = update.message.message_id if update.message else None
+    
+    async def start(self):
+        """بدء التفكير — 💭 reaction + مؤشر كتابة"""
+        # إرسال 💭 reaction
+        await self._set_reaction("💭")
+        
+        # بدء مؤشر الكتابة (خفيف — كل 5 ثواني)
+        self.typing_task = asyncio.create_task(self._typing_indicator())
+        
+        return self
+    
+    async def _set_reaction(self, emoji: str):
+        """إرسال emoji reaction على رسالة المستخدم"""
+        if not self._chat_id or not self._message_id:
+            return
+        try:
+            from telegram import ReactionTypeEmoji
+            await self.context.bot.setMessageReaction(
+                chat_id=self._chat_id,
+                message_id=self._message_id,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+        except Exception as e:
+            logger.debug(f"Could not set reaction {emoji}: {e}")
+    
+    async def _typing_indicator(self):
+        """مؤشر كتابة خفيف — كل 5 ثواني"""
+        try:
+            while not self._finished:
+                try:
+                    await self.context.bot.send_chat_action(
+                        chat_id=self._chat_id,
+                        action="typing"
+                    )
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+    
+    async def _stop_typing(self):
+        """إيقاف مؤشر الكتابة"""
+        self._finished = True
+        if self.typing_task and not self.typing_task.done():
+            self.typing_task.cancel()
+            try:
+                await self.typing_task
+            except asyncio.CancelledError:
+                pass
+    
+    async def success(self):
+        """اكتمل بنجاح — ✅ reaction"""
+        await self._stop_typing()
+        await self._set_reaction("✅")
+    
+    async def error(self):
+        """حصل خطأ — ❌ reaction"""
+        await self._stop_typing()
+        await self._set_reaction("❌")
+    
+    # Aliases
+    async def complete(self):
+        """Alias لـ success()"""
+        await self.success()
+
+
+# ═══════════════════════════════════════
 # دوال مساعدة سريعة - Quick Helpers
 # ═══════════════════════════════════════
 

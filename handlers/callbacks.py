@@ -702,7 +702,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         from ai_engine import analyze_image
         from formatters import clean_ai_response, smart_split_message
-        from progress import ProgressManager, AI_STAGES
+        from progress import TelegramThinkingFeedback
 
         img_ctx = _user_image_context.get(user_id)
         if not img_ctx:
@@ -712,21 +712,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("❌ I no longer have the image context. Please upload the image again.")
             return
 
-        stages = AI_STAGES(lang)
         title = "تحليل تفصيلي للصورة" if lang == "ar" else "Detailed Image Analysis"
-        progress = ProgressManager(query, context, stages, lang, title, timeout=ProgressManager.DEFAULT_TIMEOUT)
-        # ProgressManager needs update.message, use query.message as fallback
-        progress.update = type('obj', (object,), {
-            'message': query.message,
-            'effective_user': query.from_user,
-            'effective_chat': query.message.chat,
-        })()
-        await progress.start()
+        # 🟢 FIX: استخدام TelegramThinkingFeedback للعمليات السريعة
+        feedback = TelegramThinkingFeedback(query, context)
+        await feedback.start()
 
         try:
-            await progress.update_stage(0)
-            await progress.update_stage(1)
-
             # Detailed analysis with vision_pro style
             response = await analyze_image(
                 image_base64=img_ctx["image_base64"],
@@ -743,19 +734,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 header = "🔬 <b>Detailed Image Analysis</b>\n━━━━━━━━━━━━━━━━━\n\n"
 
             full_response = header + response
-            await progress.update_stage(2)
+            await feedback.success()
 
             if len(full_response) > 4000:
-                await progress.complete(delete_progress=True)
                 chunks = smart_split_message(full_response)
                 for chunk in chunks:
                     await query.message.reply_text(chunk, parse_mode="HTML")
             else:
-                await progress.complete(final_message=full_response, delete_progress=False)
+                await query.message.reply_text(full_response, parse_mode="HTML", disable_web_page_preview=True)
 
         except Exception as e:
             logger.error(f"Error in image_detail callback: {e}")
-            await progress.error("حدث خطأ في التحليل التفصيلي" if lang == "ar" else "Error in detailed analysis")
+            await feedback.error()
+            await query.message.reply_text("حدث خطأ في التحليل التفصيلي" if lang == "ar" else "Error in detailed analysis")
 
     # ═══ تعديل الصور بالذكاء الاصطناعي 🖌️ ═══
     elif data == "image_edit":
