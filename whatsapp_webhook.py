@@ -4825,7 +4825,8 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
                         f"🍪 *حالة ملف الكوكيز*\n\n"
                         f"📊 الحجم: {size} bytes\n"
                         f"🔢 عدد الكوكيز: {len(cookie_lines)}\n"
-                        f"▶️ كوكيز YouTube: {len(yt_cookies)}\n\n"
+                        f"▶️ كوكيز YouTube: {len(yt_cookies)}\n"
+                        f"🔴 لا كوكيز تلقائية — بس كوكيز مرفوعة من المستخدمين\n\n"
                         f"✅ الملف موجود وشغال!\n\n"
                         f"💡 لرفع ملف جديد: ابعت ملف cookies.txt كـ document مع كتابة *cookies* في الرسالة\n"
                         f"🗑️ لمسح الملف: /cookies delete"
@@ -4835,7 +4836,8 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
             else:
                 msg = (
                     "🍪 *ملف الكوكيز مش موجود*\n\n"
-                    "⚠️ بدون ملف كوكيز، YouTube ممكن يمنع التحميل.\n\n"
+                    "⚠️ بدون ملف كوكيز، YouTube ممكن يمنع التحميل.\n"
+                    "🔴 مفيش كوكيز تلقائية — بس كوكيز مرفوعة من المستخدمين!\n\n"
                     "💡 ابعت ملف cookies.txt كـ document مع كتابة *cookies* في الرسالة\n\n"
                     "إزاي تجيب الملف:\n"
                     "1️⃣ افتح Chrome على الكمبيوتر\n"

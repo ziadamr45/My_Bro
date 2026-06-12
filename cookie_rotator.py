@@ -353,7 +353,7 @@ def get_cookie_rotation_status() -> dict:
         "file_path": _COOKIES_FILE,
         "total_cookies": count,
         "admin_cookies": len(admin_cookies),
-        "auto_cookies": max(0, count - len(admin_cookies)),
+        "auto_cookies": 0,  # 🔴 دايماً 0 — لا كوكيز تلقائية
         "last_modified": last_modified,
         "rotation_interval": f"{ROTATION_INTERVAL_MIN}-{ROTATION_INTERVAL_MAX}s",
     }

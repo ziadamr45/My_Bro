@@ -4095,7 +4095,7 @@ Send a cookies.txt file from your device and we'll add it to the bot to help wit
 5️⃣ ابعت الملف هنا كـ document (ملف)
 
 ⚡ بعد رفع الملف، التحميل من YouTube هيشتغل بشكل أفضل بكثير!
-🔄 الكوكيز التلقائية بتتولد كل 1-2 دقيقة كمان!
+🔴 مفيش كوكيز تلقائية — بس كوكيز مرفوعة من المستخدمين!
 
 📁 أو ارفع الملف يدوياً: <code>{_COOKIES_FILE}</code>"""
     
