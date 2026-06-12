@@ -303,12 +303,45 @@ async def search_images_unsplash(query: str, count: int = 3) -> Optional[List[Di
                         "download_url": item.get("links", {}).get("download", ""),
                     })
                 
-                return results
+                # 🛡️ فلترة النتائج — استبعاد الصور اللي فيها كلمات ممنوعة (Unsplash مفيهاش Safe Search API)
+                return _filter_safe_image_results(results)
         
     except Exception as e:
         logger.warning(f"Unsplash search error: {e}")
         return None
 
+
+
+
+# ═══════════════════════════════════════
+# 🛡️ فلترة نتائج الصور — طبقة حماية إضافية
+# 🔴 للمصادر اللي مفيهاش Safe Search API (زي Pexels و Unsplash)
+# ═══════════════════════════════════════
+
+def _filter_safe_image_results(results: List[Dict]) -> List[Dict]:
+    """فلترة نتائج بحث الصور — استبعاد النتائج اللي فيها كلمات ممنوعة
+    
+    🔴 طبقة حماية إضافية للمصادر اللي مفيهاش Safe Search (زي Pexels و Unsplash)
+    بنستخدم نفس قائمة الكلمات الممنوعة من content_safety module
+    
+    Returns: قائمة النتائج الآمنة فقط
+    """
+    try:
+        from content_safety import _check_keywords
+        safe = []
+        for r in results:
+            desc = r.get("description", "")
+            author = r.get("author", "")
+            source = r.get("source", "")
+            text = f"{desc} {author} {source}"
+            is_blocked, _ = _check_keywords(text)
+            if not is_blocked:
+                safe.append(r)
+        if len(safe) < len(results):
+            logger.info(f"🛡️ Image safety filter: {len(results)} results → {len(safe)} safe ({len(results) - len(safe)} blocked)")
+        return safe
+    except Exception:
+        return results  # Fail-open
 
 # ═══════════════════════════════════════
 # Pexels API (أساسي — صور عالية الجودة)
@@ -359,7 +392,8 @@ async def search_images_pexels(query: str, count: int = 3) -> Optional[List[Dict
                         "download_url": item.get("src", {}).get("original", ""),
                     })
                 
-                return results
+                # 🛡️ فلترة النتائج — استبعاد الصور اللي فيها كلمات ممنوعة (Pexels مفيهاش Safe Search API)
+                return _filter_safe_image_results(results)
         
     except Exception as e:
         logger.warning(f"Pexels search error: {e}")

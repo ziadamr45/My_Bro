@@ -403,6 +403,15 @@ async def _execute_photo_search(query_obj, query_text: str, count: int, lang: st
                 await query_obj.edit_message_text("❌ No images found. Try different keywords!")
             return
         
+        # 🛡️ L2: فلترة نتائج البحث — استبعاد الصور غير الآمنة
+        try:
+            results = await check_search_results_safety(results, platform="telegram", user_id=str(user_id))
+            if not results:
+                await query_obj.edit_message_text(get_no_safe_results_message(lang), parse_mode="HTML")
+                return
+        except Exception:
+            pass  # Fail-open
+        
         if lang == "ar":
             await query_obj.edit_message_text(f"📥 جاري تحميل {count} صور (وصلت {len(results)} نتيجة بحث)...")
         else:

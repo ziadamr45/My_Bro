@@ -6626,6 +6626,15 @@ async def _execute_photo_search(wa_id: str, query: str, count: int, wa_user_id: 
             await _send_whatsapp_message(wa_id, "❌ مفيش صور! جرب كلمات بحث تانية.")
             return
         
+        # 🛡️ L2: فلترة نتائج البحث — استبعاد الصور غير الآمنة
+        try:
+            results = await check_search_results_safety(results, platform="whatsapp", user_id=str(wa_user_id))
+            if not results:
+                await _send_whatsapp_message(wa_id, get_no_safe_results_message("ar"))
+                return
+        except Exception as e:
+            logger.warning(f"🛡️ Image search results safety check failed (allowing): {e}")
+        
         await _send_whatsapp_message(wa_id, f"📥 جاري تحميل {count} صور (وصلت {len(results)} نتيجة بحث)...")
         
         # 🔴 FIX: بنحمل من كل النتائج لحد ما نوصل للعدد المطلوب
