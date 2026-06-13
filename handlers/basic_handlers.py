@@ -365,17 +365,21 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /plan - عرض خطط الاشتراك مع تفاصيل الانتهاء"""
+    """أمر /plan - عرض خطط الاشتراك مع تفاصيل الانتهاء والحدود"""
     user_id = update.effective_user.id
     lang = get_language(user_id)
     increment_command_count(user_id)
 
     message = premium_features_message(lang, user_id=user_id)
 
-    # 🔴 إضافة معلومات تاريخ الانتهاء/مدى الحياة للمشتركين
-    from premium import get_premium_info, is_premium as _is_prem
+    from premium import get_premium_info, is_premium as _is_prem, get_user_plan, get_usage, PLAN_LIMITS
     from admin import is_admin as _is_adm
-    if _is_prem(user_id) and not _is_adm(user_id):
+    is_user_admin = _is_adm(user_id)
+    is_user_premium = _is_prem(user_id)
+    plan = get_user_plan(user_id)
+
+    # 🔴 إضافة معلومات تاريخ الانتهاء/مدى الحياة للمشتركين
+    if is_user_premium and not is_user_admin:
         info = get_premium_info(user_id, lang)
         expiry_line = info.get("expires_display", "")
         if expiry_line and expiry_line != "—":
@@ -383,6 +387,51 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message += f"\n\n⏳ <b>الاشتراك:</b> {expiry_line}"
             else:
                 message += f"\n\n⏳ <b>Subscription:</b> {expiry_line}"
+
+    # 🔴 إضافة حدود الاستخدام للمستخدمين المجانيين
+    if plan == "free" and not is_user_admin:
+        usage = get_usage(user_id)
+        limits = PLAN_LIMITS.get("free", PLAN_LIMITS["free"])
+
+        ai_rem = max(0, limits["ai_messages_per_day"] - usage.get("ai_messages", 0))
+        pdf_rem = max(0, limits["pdf_analyses_per_day"] - usage.get("pdf_analyses", 0))
+        img_rem = max(0, limits["image_analyses_per_day"] - usage.get("image_analyses", 0))
+        yt_rem = max(0, limits["youtube_summaries_per_day"] - usage.get("youtube_summaries", 0))
+        search_rem = max(0, limits["searches_per_day"] - usage.get("searches", 0))
+        photo_rem = max(0, limits.get("photo_searches_per_day", 3) - usage.get("photo_searches", 0))
+
+        ai_used = usage.get("ai_messages", 0)
+        pdf_used = usage.get("pdf_analyses", 0)
+        img_used = usage.get("image_analyses", 0)
+        yt_used = usage.get("youtube_summaries", 0)
+        search_used = usage.get("searches", 0)
+        photo_used = usage.get("photo_searches", 0)
+
+        if lang == "ar":
+            usage_block = (
+                f"\n\n🆓 <b>حدودك اليومية:</b>\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                f"💬 رسائل: {ai_used}/{limits['ai_messages_per_day']} (متبقي {ai_rem})\n"
+                f"📄 PDF: {pdf_used}/{limits['pdf_analyses_per_day']} (متبقي {pdf_rem})\n"
+                f"🖼️ تحليل صور: {img_used}/{limits['image_analyses_per_day']} (متبقي {img_rem})\n"
+                f"🎬 يوتيوب: {yt_used}/{limits['youtube_summaries_per_day']} (متبقي {yt_rem})\n"
+                f"🔍 بحث: {search_used}/{limits['searches_per_day']} (متبقي {search_rem})\n"
+                f"🖼️ بحث صور: {photo_used}/{limits.get('photo_searches_per_day', 3)} (متبقي {photo_rem})\n\n"
+                "💡 الحدود بتتجدد كل يوم الساعة 12:00 منتصف الليل"
+            )
+        else:
+            usage_block = (
+                f"\n\n🆓 <b>Your Daily Limits:</b>\n"
+                "━━━━━━━━━━━━━━━━━\n"
+                f"💬 Messages: {ai_used}/{limits['ai_messages_per_day']} ({ai_rem} left)\n"
+                f"📄 PDF: {pdf_used}/{limits['pdf_analyses_per_day']} ({pdf_rem} left)\n"
+                f"🖼️ Image Analysis: {img_used}/{limits['image_analyses_per_day']} ({img_rem} left)\n"
+                f"🎬 YouTube: {yt_used}/{limits['youtube_summaries_per_day']} ({yt_rem} left)\n"
+                f"🔍 Search: {search_used}/{limits['searches_per_day']} ({search_rem} left)\n"
+                f"🖼️ Photo Search: {photo_used}/{limits.get('photo_searches_per_day', 3)} ({photo_rem} left)\n\n"
+                "💡 Limits reset daily at 12:00 AM midnight"
+            )
+        message += usage_block
 
     keyboard = get_premium_keyboard(lang, user_id=user_id)
     await update.message.reply_text(message, parse_mode="HTML", reply_markup=keyboard)
