@@ -1,0 +1,1862 @@
+     1→"""
+     2→نظام الذاكرة المتقدم - Advanced Memory System
+     3→يستخدم PostgreSQL (Neon) لتخزين دائم يتجاوز إعادة تشغيل البوت
+     4→مع fallback لـ SQLite لو PostgreSQL مش متاح
+     5→
+     6→يشمل:
+     7→- ملف المستخدم (اسم، لغة، اهتمامات، شركات مفضلة)
+     8→- ذاكرة المحادثات (آخر 50 محادثة)
+     9→- ذاكرة التعلم (المواضيع المتعلمة + التقدم)
+    10→- نظام المفضلات (أخبار، مواضيع، أدوات، تقارير)
+    11→- تفضيلات المستخدم (لغة، إشعارات، مصادر، طول الرد)
+    12→- ذاكرة ذكية (تحفظ بس المهم)
+    13→+ نظام الاشتراك في الأخبار اليومية (متوافق مع القديم)
+    14→"""
+    15→
+    16→import json
+    17→import os
+    18→import logging
+    19→import threading
+    20→import time
+    21→from typing import Dict, List, Optional, Any
+    22→from datetime import datetime
+    23→
+    24→from config import DATA_DIR, USERS_FILE, DATABASE_PATH
+    25→
+    26→logger = logging.getLogger(__name__)
+    27→
+    28→
+    29→# ═══════════════════════════════════════
+    30→# إعداد قاعدة البيانات - Database Setup
+    31→# ═══════════════════════════════════════
+    32→
+    33→# Connection Pool بدل threading.local()
+    34→# threading.local() كان بيعمل connection جديد لكل thread ومبيقفلوش صح
+    35→# على Neon free tier (حد أقصى 5 connections) ده بيوقع البوت
+    36→_pg_pool = None  # psycopg2.pool.SimpleConnectionPool
+    37→_pg_pool_lock = threading.Lock()  # حماية الـ pool من concurrent access
+    38→_local = threading.local()  # بيفضل لـ SQLite فقط
+    39→_db_type = None  # "postgresql" or "sqlite"
+    40→
+    41→
+    42→def _clean_database_url(url: str) -> str:
+    43→    """تنظيف رابط قاعدة البيانات - إزالة المعاملات غير المتوافقة"""
+    44→    if not url:
+    45→        return url
+    46→
+    47→    # إزالة channel_binding=require لأن psycopg2 القديم مش بيدعمه
+    48→    # ده بيسبب خطأ "unknown connection parameter" وفشل الاتصال
+    49→    import re as _re
+    50→    url = _re.sub(r'&?channel_binding=[^&]*', '', url)
+    51→    url = _re.sub(r'\?channel_binding=[^&]*&', '?', url)
+    52→    url = _re.sub(r'\?channel_binding=[^&]*$', '', url)
+    53→
+    54→    # تنظيف trailing ? أو & بعد إزالة المعاملات
+    55→    url = _re.sub(r'\?$', '', url)
+    56→    url = _re.sub(r'&$', '', url)
+    57→    url = _re.sub(r'\?&', '?', url)
+    58→
+    59→    # إضافة sslmode=require لو مش موجود وده Neon
+    60→    if "sslmode=" not in url and "neon.tech" in url:
+    61→        url += "&sslmode=require" if "?" in url else "?sslmode=require"
+    62→
+    63→    return url
+    64→
+    65→
+    66→def _get_database_url():
+    67→    """الحصول على رابط PostgreSQL من البيئة"""
+    68→    url = os.environ.get("DATABASE_URL", "")
+    69→    if not url:
+    70→        # محاولة من إعدادات config
+    71→        try:
+    72→            from config import DATABASE_URL as CONFIG_DB_URL
+    73→            url = CONFIG_DB_URL
+    74→        except (ImportError, AttributeError):
+    75→            pass
+    76→
+    77→    # تنظيف الرابط من المعاملات غير المتوافقة
+    78→    url = _clean_database_url(url)
+    79→
+    80→    if url:
+    81→        # لا نسجل الـ URL كامل لأسباب أمنية
+    82→        masked = url[:25] + "***" + url[-15:] if len(url) > 40 else "***"
+    83→        logger.info(f"🔗 DATABASE_URL found: {masked}")
+    84→    else:
+    85→        logger.error("❌ DATABASE_URL is NOT set! Data will NOT persist across deployments!")
+    86→        logger.error("❌ Set DATABASE_URL environment variable on Railway with your Neon PostgreSQL URL")
+    87→    return url
+    88→
+    89→
+    90→def _init_postgresql():
+    91→    """تهيئة قاعدة بيانات PostgreSQL مع Connection Pool
+    92→    
+    93→    Uses maxconn=3 (instead of 5) to leave headroom for Neon's own
+    94→    operations on the free tier (5 connection max). connect_timeout=10s
+    95→    for faster failure detection.
+    96→    
+    97→    Simplified: no retry path — if the first attempt fails, we fall back
+    98→    to SQLite. The old retry path duplicated table creation logic and
+    99→    could leave the pool in an inconsistent state.
+   100→    """
+   101→    global _db_type, _pg_pool
+   102→    url = _get_database_url()
+   103→    if not url:
+   104→        return False
+   105→
+   106→    try:
+   107→        import psycopg2
+   108→        from psycopg2 import pool as pg_pool_mod
+   109→
+   110→        # إنشاء Connection Pool
+   111→        # maxconn=3 — يسيب headroom لعمليات Neon نفسه (limit 5 connections)
+   112→        _pg_pool = pg_pool_mod.SimpleConnectionPool(
+   113→            1, 3,  # min=1, max=3 connections
+   114→            url,
+   115→            connect_timeout=10
+   116→        )
+   117→        _db_type = "postgresql"
+   118→
+   119→        # Verify pool works + create tables in a single connection
+   120→        conn = _pg_pool.getconn()
+   121→        try:
+   122→            conn.autocommit = True
+   123→            _create_postgresql_tables(conn)
+   124→        finally:
+   125→            _pg_pool.putconn(conn)
+   126→
+   127→        logger.info("✅ PostgreSQL database initialized successfully (Neon) with connection pool (max=3)")
+   128→        return True
+   129→
+   130→    except Exception as e:
+   131→        logger.error(f"❌ PostgreSQL init FAILED: {type(e).__name__}: {e}")
+   132→        logger.error("❌ Data will NOT persist! Check DATABASE_URL environment variable on Railway!")
+   133→        logger.error("❌ Common issues: channel_binding=require, missing sslmode, wrong credentials")
+   134→        _db_type = None
+   135→        # Clean up failed pool
+   136→        if _pg_pool is not None:
+   137→            try:
+   138→                _pg_pool.closeall()
+   139→            except Exception:
+   140→                pass
+   141→            _pg_pool = None
+   142→        return False
+   143→
+   144→
+   145→def _create_postgresql_tables(conn):
+   146→    """إنشاء جداول PostgreSQL — دالة مشتركة لتجنب تكرار الكود
+   147→    
+   148→    ⚠️ BUG FIX: Previously, the retry path in _init_postgresql() only created
+   149→    user_profiles but missed conversations, learning_progress, favorites,
+   150→    user_memories, and banned_users. This caused crashes when the first
+   151→    connection attempt failed but the retry succeeded. Now both paths use
+   152→    the same table creation function.
+   153→    """
+   154→    try:
+   155→        conn.autocommit = True
+   156→        cur = conn.cursor()
+   157→        cur.execute("""
+   158→            CREATE TABLE IF NOT EXISTS user_profiles (
+   159→                user_id BIGINT PRIMARY KEY,
+   160→                name TEXT DEFAULT '',
+   161→                language TEXT DEFAULT 'ar',
+   162→                news_time TEXT DEFAULT '12:00',
+   163→                sources TEXT DEFAULT '[]',
+   164→                subscribed INTEGER DEFAULT 0,
+   165→                response_length TEXT DEFAULT 'medium',
+   166→                notification_enabled INTEGER DEFAULT 1,
+   167→                interests TEXT DEFAULT '[]',
+   168→                favorite_companies TEXT DEFAULT '[]',
+   169→                created_at TEXT,
+   170→                last_interaction TEXT,
+   171→                commands_used INTEGER DEFAULT 0,
+   172→                chat_count INTEGER DEFAULT 0,
+   173→                last_news_delivery TEXT DEFAULT NULL
+   174→            );
+   175→        """)
+   176→        cur.execute("""
+   177→            CREATE TABLE IF NOT EXISTS conversations (
+   178→                id SERIAL PRIMARY KEY,
+   179→                user_id BIGINT NOT NULL,
+   180→                role TEXT NOT NULL,
+   181→                content TEXT NOT NULL,
+   182→                timestamp TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+   183→                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+   184→            );
+   185→        """)
+   186→        cur.execute("""
+   187→            CREATE TABLE IF NOT EXISTS learning_progress (
+   188→                id SERIAL PRIMARY KEY,
+   189→                user_id BIGINT NOT NULL,
+   190→                topic TEXT NOT NULL,
+   191→                level TEXT DEFAULT 'explored',
+   192→                learned_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+   193→                UNIQUE(user_id, topic),
+   194→                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+   195→            );
+   196→        """)
+   197→        cur.execute("""
+   198→            CREATE TABLE IF NOT EXISTS favorites (
+   199→                id SERIAL PRIMARY KEY,
+   200→                user_id BIGINT NOT NULL,
+   201→                category TEXT NOT NULL,
+   202→                title TEXT NOT NULL,
+   203→                content TEXT DEFAULT '',
+   204→                url TEXT DEFAULT '',
+   205→                saved_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+   206→                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+   207→            );
+   208→        """)
+   209→        cur.execute("""
+   210→            CREATE TABLE IF NOT EXISTS user_memories (
+   211→                id SERIAL PRIMARY KEY,
+   212→                user_id BIGINT NOT NULL,
+   213→                key TEXT NOT NULL,
+   214→                value TEXT NOT NULL,
+   215→                category TEXT DEFAULT 'general',
+   216→                created_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+   217→                UNIQUE(user_id, key),
+   218→                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+   219→            );
+   220→        """)
+   221→        cur.execute("""
+   222→            CREATE TABLE IF NOT EXISTS banned_users (
+   223→                user_id BIGINT PRIMARY KEY,
+   224→                reason TEXT DEFAULT '',
+   225→                banned_at TEXT DEFAULT (NOW() AT TIME ZONE 'UTC'::text),
+   226→                banned_by TEXT DEFAULT '',
+   227→                warning_count INTEGER DEFAULT 0
+   228→            );
+   229→        """)
+   230→        # إنشاء فهارس
+   231→        cur.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, timestamp DESC);")
+   232→        cur.execute("CREATE INDEX IF NOT EXISTS idx_learning_user ON learning_progress(user_id);")
+   233→        cur.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, category);")
+   234→        cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id, category);")
+   235→        # ✅ فهرس لرقم واتساب — مهم جداً لـ find_user_by_wa_phone() و lookup السريع
+   236→        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_profiles_wa_phone ON user_profiles(wa_phone);")
+   237→        cur.close()
+   238→        return True
+   239→    except Exception as e:
+   240→        logger.error(f"Error creating PostgreSQL tables: {e}")
+   241→        return False
+   242→
+   243→
+   244→def _get_pg_conn():
+   245→    """الحصول على اتصال PostgreSQL من الـ Connection Pool
+   246→    
+   247→    Simple retrieval — no pre-query health check. Stale connections are
+   248→    handled by _execute() which catches query failures and reconnects via
+   249→    _reconnect_pool(). This avoids wasting pool connections on SELECT 1
+   250→    probes that can themselves fail and consume extra connections.
+   251→    """
+   252→    global _pg_pool
+   253→    if _pg_pool is None:
+   254→        return None
+   255→    try:
+   256→        conn = _pg_pool.getconn()
+   257→        conn.autocommit = True
+   258→        return conn
+   259→    except Exception as e:
+   260→        logger.error(f"PostgreSQL pool getconn failed: {type(e).__name__}: {e}")
+   261→        return None
+   262→
+   263→
+   264→def _return_pg_conn(conn, close=False):
+   265→    """إرجاع اتصال PostgreSQL للـ Connection Pool
+   266→    
+   267→    Args:
+   268→        close: If True, close the connection instead of returning it to the pool.
+   269→               Used when the connection is known to be broken/stale.
+   270→    """
+   271→    global _pg_pool
+   272→    if _pg_pool is not None and conn is not None:
+   273→        try:
+   274→            _pg_pool.putconn(conn, close=close)
+   275→        except Exception as e:
+   276→            logger.debug(f"PostgreSQL pool putconn error (non-critical): {e}")
+   277→
+   278→
+   279→def _reconnect_pool():
+   280→    """Recreate the entire connection pool when all connections are stale.
+   281→    
+   282→    Neon free tier closes idle connections after ~5 minutes. When a query
+   283→    fails with a connection error, _execute() calls this to get a fresh pool
+   284→    instead of trying to recycle individual connections.
+   285→    
+   286→    Returns True if reconnection succeeded, False otherwise.
+   287→    """
+   288→    global _pg_pool, _db_type
+   289→    with _pg_pool_lock:
+   290→        # Close the old pool entirely
+   291→        if _pg_pool is not None:
+   292→            try:
+   293→                _pg_pool.closeall()
+   294→            except Exception:
+   295→                pass
+   296→            _pg_pool = None
+   297→
+   298→        # Create a fresh pool
+   299→        url = _get_database_url()
+   300→        if not url:
+   301→            _db_type = None
+   302→            return False
+   303→
+   304→        try:
+   305→            from psycopg2 import pool as pg_pool_mod
+   306→            _pg_pool = pg_pool_mod.SimpleConnectionPool(
+   307→                1, 3,
+   308→                url,
+   309→                connect_timeout=10
+   310→            )
+   311→            logger.info("✅ PostgreSQL pool reconnected successfully")
+   312→            return True
+   313→        except Exception as e:
+   314→            logger.error(f"❌ PostgreSQL pool reconnect failed: {e}")
+   315→            _db_type = None
+   316→            _pg_pool = None
+   317→            return False
+   318→
+   319→
+   320→def _init_sqlite():
+   321→    """تهيئة قاعدة بيانات SQLite كـ fallback
+   322→    
+   323→    ⚠️ BUG FIX: Added thread safety check. SQLite connections are NOT thread-safe
+   324→    by default — using a connection created in one thread from another thread can
+   325→    cause 'database is locked' errors or silent data corruption. Now we verify
+   326→    that the current thread matches the thread that created the connection, and
+   327→    create a new connection if there's a mismatch.
+   328→    """
+   329→    global _db_type
+   330→    import sqlite3
+   331→    
+   332→    current_tid = threading.current_thread().ident
+   333→    
+   334→    # Check if existing connection belongs to current thread
+   335→    if hasattr(_local, 'sqlite_conn') and _local.sqlite_conn is not None:
+   336→        if getattr(_local, 'sqlite_tid', None) != current_tid:
+   337→            logger.warning(f"SQLite connection belongs to different thread (expected {_local.sqlite_tid}, got {current_tid}), creating new connection")
+   338→            try:
+   339→                _local.sqlite_conn.close()
+   340→            except Exception:
+   341→                pass
+   342→            _local.sqlite_conn = None
+   343→    
+   344→    if not hasattr(_local, 'sqlite_conn') or _local.sqlite_conn is None:
+   345→        os.makedirs(DATA_DIR, exist_ok=True)
+   346→        _local.sqlite_conn = sqlite3.connect(DATABASE_PATH, timeout=10)
+   347→        _local.sqlite_conn.row_factory = sqlite3.Row
+   348→        _local.sqlite_conn.execute("PRAGMA journal_mode=WAL")
+   349→        _local.sqlite_conn.execute("PRAGMA foreign_keys=ON")
+   350→        _local.sqlite_tid = current_tid  # Track which thread owns this connection
+   351→
+   352→    db = _local.sqlite_conn
+   353→    db.executescript("""
+   354→        CREATE TABLE IF NOT EXISTS user_profiles (
+   355→            user_id INTEGER PRIMARY KEY,
+   356→            name TEXT DEFAULT '',
+   357→            language TEXT DEFAULT 'ar',
+   358→            news_time TEXT DEFAULT '12:00',
+   359→            sources TEXT DEFAULT '[]',
+   360→            subscribed INTEGER DEFAULT 0,
+   361→            response_length TEXT DEFAULT 'medium',
+   362→            notification_enabled INTEGER DEFAULT 1,
+   363→            interests TEXT DEFAULT '[]',
+   364→            favorite_companies TEXT DEFAULT '[]',
+   365→            created_at TEXT,
+   366→            last_interaction TEXT,
+   367→            commands_used INTEGER DEFAULT 0,
+   368→            chat_count INTEGER DEFAULT 0,
+   369→            last_news_delivery TEXT DEFAULT NULL
+   370→        );
+   371→
+   372→        CREATE TABLE IF NOT EXISTS conversations (
+   373→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   374→            user_id INTEGER NOT NULL,
+   375→            role TEXT NOT NULL,
+   376→            content TEXT NOT NULL,
+   377→            timestamp TEXT DEFAULT (datetime('now')),
+   378→            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+   379→        );
+   380→
+   381→        CREATE TABLE IF NOT EXISTS learning_progress (
+   382→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   383→            user_id INTEGER NOT NULL,
+   384→            topic TEXT NOT NULL,
+   385→            level TEXT DEFAULT 'explored',
+   386→            learned_at TEXT DEFAULT (datetime('now')),
+   387→            UNIQUE(user_id, topic),
+   388→            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+   389→        );
+   390→
+   391→        CREATE TABLE IF NOT EXISTS favorites (
+   392→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   393→            user_id INTEGER NOT NULL,
+   394→            category TEXT NOT NULL,
+   395→            title TEXT NOT NULL,
+   396→            content TEXT DEFAULT '',
+   397→            url TEXT DEFAULT '',
+   398→            saved_at TEXT DEFAULT (datetime('now')),
+   399→            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+   400→        );
+   401→
+   402→        CREATE TABLE IF NOT EXISTS user_memories (
+   403→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   404→            user_id INTEGER NOT NULL,
+   405→            key TEXT NOT NULL,
+   406→            value TEXT NOT NULL,
+   407→            category TEXT DEFAULT 'general',
+   408→            created_at TEXT DEFAULT (datetime('now')),
+   409→            UNIQUE(user_id, key),
+   410→            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+   411→        );
+   412→
+   413→        CREATE TABLE IF NOT EXISTS banned_users (
+   414→            user_id INTEGER PRIMARY KEY,
+   415→            reason TEXT DEFAULT '',
+   416→            banned_at TEXT DEFAULT (datetime('now')),
+   417→            banned_by TEXT DEFAULT '',
+   418→            warning_count INTEGER DEFAULT 0
+   419→        );
+   420→
+   421→        CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, timestamp DESC);
+   422→        CREATE INDEX IF NOT EXISTS idx_learning_user ON learning_progress(user_id);
+   423→        CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, category);
+   424→        CREATE INDEX IF NOT EXISTS idx_memories_user ON user_memories(user_id, category);
+   425→    """)
+   426→    db.commit()
+   427→    _db_type = "sqlite"
+   428→    logger.info("✅ SQLite database initialized successfully (fallback)")
+   429→    return db
+   430→
+   431→
+   432→def init_database():
+   433→    """إنشاء جداول قاعدة البيانات"""
+   434→    logger.info("═══ Initializing Database ═══")
+   435→    # محاولة PostgreSQL أولاً
+   436→    if not _init_postgresql():
+   437→        # Fallback لـ SQLite
+   438→        logger.warning("⚠️⚠️⚠️ PostgreSQL FAILED! Falling back to SQLite!")
+   439→        logger.warning("⚠️⚠️⚠️ DATA WILL NOT PERSIST across Railway deploys!")
+   440→        logger.warning("⚠️⚠️⚠️ Make sure DATABASE_URL is set correctly on Railway!")
+   441→        _init_sqlite()
+   442→    else:
+   443→        logger.info("✅ PostgreSQL (Neon) connected — data WILL persist across deployments!")
+   444→        # Verify connection by counting users
+   445→        try:
+   446→            result = _execute("SELECT COUNT(*) FROM user_profiles", fetchone=True)
+   447→            user_count = result[0] if result else 0
+   448→            logger.info(f"📊 Database has {user_count} existing users — data is safe!")
+   449→        except Exception as e:
+   450→            logger.warning(f"Could not count users: {e}")
+   451→    # تشغيل migration لإضافة أعمدة جديدة
+   452→    _migrate_add_last_news_delivery()
+   453→    logger.info(f"═══ Database ready (type: {_db_type}) ═══")
+   454→
+   455→    # تحذير نهائي لو SQLite
+   456→    if _db_type == "sqlite":
+   457→        logger.error("🔴🔴🔴 CRITICAL: Using SQLite — ALL DATA WILL BE LOST on next deploy!")
+   458→        logger.error("🔴🔴🔴 Set DATABASE_URL on Railway to fix this!")
+   459→
+   460→
+   461→def _migrate_add_last_news_delivery():
+   462→    """إضافة عمود last_news_delivery لو مش موجود"""
+   463→    if _is_postgres():
+   464→        try:
+   465→            _execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_news_delivery TEXT DEFAULT NULL")
+   466→        except Exception:
+   467→            pass  # Column might already exist
+   468→    else:
+   469→        try:
+   470→            db = _get_db()
+   471→            # Check if column exists
+   472→            cursor = db.execute("PRAGMA table_info(user_profiles)")
+   473→            columns = [row[1] for row in cursor.fetchall()]
+   474→            if 'last_news_delivery' not in columns:
+   475→                db.execute("ALTER TABLE user_profiles ADD COLUMN last_news_delivery TEXT DEFAULT NULL")
+   476→                db.commit()
+   477→        except Exception:
+   478→            pass
+   479→
+   480→
+   481→def _get_db():
+   482→    """الحصول على اتصال SQLite — PostgreSQL uses the connection pool instead.
+   483→    
+   484→    This function ONLY returns a SQLite connection. For PostgreSQL, use
+   485→    _get_pg_conn()/_return_pg_conn() to manage pool connections.
+   486→    Returns None if the database type is PostgreSQL (not an error).
+   487→    """
+   488→    if _db_type == "sqlite":
+   489→        return _init_sqlite()
+   490→    return None
+   491→
+   492→
+   493→def _is_postgres():
+   494→    """هل نستخدم PostgreSQL؟"""
+   495→    return _db_type == "postgresql"
+   496→
+   497→
+   498→def _execute(query, params=(), fetch=False, fetchone=False, dict_cursor=False):
+   499→    """تنفيذ استعلام مع دعم PostgreSQL (via pool) و SQLite
+   500→    
+   501→    PostgreSQL retry strategy (simplified v3):
+   502→    - Try query on a single connection from the pool
+   503→    - On failure: close the broken connection, reconnect the pool, retry once
+   504→    - Only ONE connection is checked out at a time (fixes pool exhaustion)
+   505→    - No more double _return_pg_conn bug (old except/finally both returned conn)
+   506→    
+   507→    Args:
+   508→        dict_cursor: If True and using PostgreSQL, returns dict results instead of tuples.
+   509→                     This eliminates the need for a second pool connection just for
+   510→                     column name resolution.
+   511→    """
+   512→    if _is_postgres():
+   513→        # First attempt
+   514→        conn = _get_pg_conn()
+   515→        if not conn:
+   516→            logger.error("PostgreSQL: no connection available from pool")
+   517→            return None
+   518→        try:
+   519→            if dict_cursor:
+   520→                from psycopg2.extras import RealDictCursor
+   521→                cur = conn.cursor(cursor_factory=RealDictCursor)
+   522→            else:
+   523→                cur = conn.cursor()
+   524→            cur.execute(query, params)
+   525→            if fetchone:
+   526→                result = cur.fetchone()
+   527→                cur.close()
+   528→                return dict(result) if dict_cursor and result else result
+   529→            elif fetch:
+   530→                result = cur.fetchall()
+   531→                cur.close()
+   532→                if dict_cursor:
+   533→                    return [dict(r) for r in result]
+   534→                return result
+   535→            else:
+   536→                conn.commit()
+   537→                cur.close()
+   538→                return None
+   539→        except Exception as e:
+   540→            logger.warning(f"PostgreSQL query failed (will retry): {e}")
+   541→            # Close the broken connection and return it to pool
+   542→            _return_pg_conn(conn, close=True)
+   543→            conn = None  # Mark as returned so finally doesn't return it again
+   544→            
+   545→            # Reconnect pool and retry once
+   546→            if not _reconnect_pool():
+   547→                logger.error("PostgreSQL: pool reconnect failed, giving up")
+   548→                return None
+   549→            retry_conn = _get_pg_conn()
+   550→            if not retry_conn:
+   551→                logger.error("PostgreSQL: no connection after reconnect")
+   552→                return None
+   553→            try:
+   554→                if dict_cursor:
+   555→                    from psycopg2.extras import RealDictCursor
+   556→                    cur = retry_conn.cursor(cursor_factory=RealDictCursor)
+   557→                else:
+   558→                    cur = retry_conn.cursor()
+   559→                cur.execute(query, params)
+   560→                if fetchone:
+   561→                    result = cur.fetchone()
+   562→                    cur.close()
+   563→                    return dict(result) if dict_cursor and result else result
+   564→                elif fetch:
+   565→                    result = cur.fetchall()
+   566→                    cur.close()
+   567→                    if dict_cursor:
+   568→                        return [dict(r) for r in result]
+   569→                    return result
+   570→                else:
+   571→                    retry_conn.commit()
+   572→                    cur.close()
+   573→                    return None
+   574→            except Exception as e2:
+   575→                logger.error(f"PostgreSQL retry also failed: {e2}")
+   576→                return None
+   577→            finally:
+   578→                _return_pg_conn(retry_conn)
+   579→        finally:
+   580→            # Only return the original connection if it wasn't already closed in except
+   581→            if conn is not None:
+   582→                _return_pg_conn(conn)
+   583→    else:
+   584→        # SQLite
+   585→        db = _get_db()
+   586→        if db is None:
+   587→            logger.error("SQLite: no database connection available")
+   588→            return None
+   589→        if fetchone:
+   590→            return db.execute(query, params).fetchone()
+   591→        elif fetch:
+   592→            return db.execute(query, params).fetchall()
+   593→        else:
+   594→            db.execute(query, params)
+   595→            db.commit()
+   596→            return None
+   597→
+   598→
+   599→# ═══════════════════════════════════════
+   600→# التوافق مع النظام القديم - Legacy Compatibility
+   601→# ═══════════════════════════════════════
+   602→
+   603→def _ensure_data_dir():
+   604→    os.makedirs(DATA_DIR, exist_ok=True)
+   605→
+   606→
+   607→def _load_all_users() -> Dict:
+   608→    _ensure_data_dir()
+   609→    if os.path.exists(USERS_FILE):
+   610→        try:
+   611→            with open(USERS_FILE, "r", encoding="utf-8") as f:
+   612→                return json.load(f)
+   613→        except (json.JSONDecodeError, IOError) as e:
+   614→            logger.warning(f"Error loading users data: {e}")
+   615→    return {}
+   616→
+   617→
+   618→def _save_all_users(data: Dict):
+   619→    _ensure_data_dir()
+   620→    try:
+   621→        with open(USERS_FILE, "w", encoding="utf-8") as f:
+   622→            json.dump(data, f, ensure_ascii=False, indent=2)
+   623→    except IOError as e:
+   624→        logger.error(f"Error saving users data: {e}")
+   625→
+   626→
+   627→def _ensure_user_in_db(user_id: int, platform: str = "telegram"):
+   628→    """التأكد إن المستخدم موجود في قاعدة البيانات
+   629→    
+   630→    Args:
+   631→        user_id: معرف المستخدم
+   632→        platform: المنصة ("telegram" أو "whatsapp") — يتم تخزينها عند إنشاء المستخدم
+   633→    """
+   634→    # Migration: إضافة عمود platform لو مش موجود
+   635→    try:
+   636→        if _is_postgres():
+   637→            _execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'telegram'")
+   638→        else:
+   639→            # SQLite: نتأكد إن العمود موجود
+   640→            try:
+   641→                _execute("SELECT platform FROM user_profiles LIMIT 1", fetchone=True)
+   642→            except Exception:
+   643→                _execute("ALTER TABLE user_profiles ADD COLUMN platform TEXT DEFAULT 'telegram'")
+   644→    except Exception:
+   645→        pass  # العمود موجود بالفعل
+   646→
+   647→    # Migration: إضافة عمود wa_phone لو مش موجود (لتخزين رقم واتساب المستخدم)
+   648→    try:
+   649→        if _is_postgres():
+   650→            _execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS wa_phone TEXT DEFAULT ''")
+   651→        else:
+   652→            try:
+   653→                _execute("SELECT wa_phone FROM user_profiles LIMIT 1", fetchone=True)
+   654→            except Exception:
+   655→                _execute("ALTER TABLE user_profiles ADD COLUMN wa_phone TEXT DEFAULT ''")
+   656→    except Exception:
+   657→        pass  # العمود موجود بالفعل
+   658→
+   659→    # Migration: إضافة عمود profile_name لو مش موجود (لتخزين الاسم الأصلي من الحساب منفصل عن الاسم المفضل)
+   660→    try:
+   661→        if _is_postgres():
+   662→            _execute("ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS profile_name TEXT DEFAULT ''")
+   663→        else:
+   664→            try:
+   665→                _execute("SELECT profile_name FROM user_profiles LIMIT 1", fetchone=True)
+   666→            except Exception:
+   667→                _execute("ALTER TABLE user_profiles ADD COLUMN profile_name TEXT DEFAULT ''")
+   668→    except Exception:
+   669→        pass  # العمود موجود بالفعل
+   670→
+   671→    row = _execute("SELECT user_id FROM user_profiles WHERE user_id = %s" if _is_postgres() else "SELECT user_id FROM user_profiles WHERE user_id = ?", (user_id,), fetchone=True)
+   672→    if not row:
+   673→        now = datetime.now().isoformat()
+   674→        _execute(
+   675→            """INSERT INTO user_profiles
+   676→            (user_id, name, language, news_time, sources, subscribed, interests,
+   677→             favorite_companies, created_at, last_interaction, commands_used, chat_count, platform)
+   678→            VALUES (%s, %s, 'ar', '12:00', '[]', 0, '[]', '[]', %s, %s, 0, 0, %s)""" if _is_postgres() else
+   679→            """INSERT OR IGNORE INTO user_profiles
+   680→            (user_id, name, language, news_time, sources, subscribed, interests,
+   681→             favorite_companies, created_at, last_interaction, commands_used, chat_count, platform)
+   682→            VALUES (?, ?, 'ar', '12:00', '[]', 0, '[]', '[]', ?, ?, 0, 0, ?)""",
+   683→            (user_id, '', now, now, platform)
+   684→        )
+   685→    elif _is_postgres():
+   686→        # تحديث platform لو مش مضبوط
+   687→        _execute("UPDATE user_profiles SET platform = %s WHERE user_id = %s AND (platform IS NULL OR platform = '')", (platform, user_id))
+   688→    
+   689→    # ✅ التأكد من وجود فهرس wa_phone لـ lookup سريع
+   690→    try:
+   691→        _execute("CREATE INDEX IF NOT EXISTS idx_user_profiles_wa_phone ON user_profiles(wa_phone)")
+   692→    except Exception:
+   693→        pass
+   694→
+   695→
+   696→def find_user_by_wa_phone(phone: str) -> Optional[int]:
+   697→    """البحث عن مستخدم واتساب برقم التليفون بدل الـ user_id
+   698→    
+   699→    ⚠️ مهم جداً: لأن Python's hash() مش deterministic عبر الريستارتات،
+   700→    ممكن نفس الرقم ينتج user_id مختلف بعد كل ريستارت.
+   701→    الدالة دي بتدور في قاعدة البيانات على wa_phone وترجع الـ user_id الصح.
+   702→    
+   703→    Returns:
+   704→        user_id لو لقى المستخدم، None لو مش موجود
+   705→    """
+   706→    if not phone:
+   707→        return None
+   708→    # تنظيف الرقم (إزالة + ومسافات)
+   709→    clean = phone.lstrip('+').strip()
+   710→    if not clean:
+   711→        return None
+   712→    ph = "%s" if _is_postgres() else "?"
+   713→    try:
+   714→        row = _execute(
+   715→            f"SELECT user_id FROM user_profiles WHERE wa_phone = {ph} AND platform = 'whatsapp' ORDER BY last_interaction DESC LIMIT 1",
+   716→            (clean,), fetchone=True
+   717→        )
+   718→        if row:
+   719→            return row[0]
+   720→        # محاولة تانية بالرقم مع +
+   721→        row = _execute(
+   722→            f"SELECT user_id FROM user_profiles WHERE wa_phone = {ph} AND platform = 'whatsapp' ORDER BY last_interaction DESC LIMIT 1",
+   723→            (f"+{clean}",), fetchone=True
+   724→        )
+   725→        if row:
+   726→            return row[0]
+   727→    except Exception as e:
+   728→        logger.error(f"Error finding user by wa_phone {phone}: {e}")
+   729→    return None
+   730→
+   731→
+   732→# ═══════════════════════════════════════
+   733→# ملف المستخدم - User Profile
+   734→# ═══════════════════════════════════════
+   735→
+   736→def get_user(user_id: int) -> Dict:
+   737→    """الحصول على بيانات المستخدم
+   738→    
+   739→    ⚠️ BUG FIX (v2): Old code fetched data TWICE using TWO separate pool 
+   740→    connections — one via _execute() and another for RealDictCursor. This 
+   741→    wasted pool connections and could exhaust the pool on Neon free tier 
+   742→    (max 5). Now we use dict_cursor=True in _execute() to get dict results 
+   743→    in a SINGLE connection.
+   744→    """
+   745→    _ensure_user_in_db(user_id)
+   746→    ph = "%s" if _is_postgres() else "?"
+   747→    if _is_postgres():
+   748→        # Use dict_cursor=True to get a dict result in a single connection
+   749→        data = _execute(f"SELECT * FROM user_profiles WHERE user_id = {ph}", (user_id,), fetchone=True, dict_cursor=True)
+   750→    else:
+   751→        row = _execute(f"SELECT * FROM user_profiles WHERE user_id = {ph}", (user_id,), fetchone=True)
+   752→        data = dict(row) if row else None
+   753→    
+   754→    if data:
+   755→        # تحويل JSON strings إلى lists
+   756→        for key in ['sources', 'interests', 'favorite_companies']:
+   757→            if isinstance(data.get(key), str):
+   758→                try:
+   759→                    data[key] = json.loads(data[key])
+   760→                except (json.JSONDecodeError, TypeError):
+   761→                    data[key] = []
+   762→        data['subscribed'] = bool(data.get('subscribed', 0))
+   763→        return data
+   764→
+   765→    # fallback للنظام القديم
+   766→    all_users = _load_all_users()
+   767→    uid = str(user_id)
+   768→    if uid not in all_users:
+   769→        all_users[uid] = {
+   770→            "language": "ar", "news_time": "12:00", "sources": [],
+   771→            "subscribed": False, "created_at": datetime.now().isoformat(),
+   772→            "last_interaction": datetime.now().isoformat(),
+   773→            "commands_used": 0, "chat_count": 0,
+   774→        }
+   775→        _save_all_users(all_users)
+   776→    user = all_users[uid]
+   777→    if "subscribed" not in user:
+   778→        user["subscribed"] = False
+   779→        _save_all_users(all_users)
+   780→    return user
+   781→
+   782→
+   783→# أسماء الأعمدة المسموح بها — حماية من SQL Injection
+   784→_ALLOWED_USER_COLUMNS = frozenset({
+   785→    'name', 'profile_name', 'language', 'news_time', 'sources', 'subscribed',
+   786→    'response_length', 'notification_enabled', 'interests',
+   787→    'favorite_companies', 'last_interaction', 'commands_used',
+   788→    'chat_count', 'last_news_delivery', 'wa_phone'
+   789→})
+   790→
+   791→def update_user(user_id: int, updates: Dict[str, Any]):
+   792→    _ensure_user_in_db(user_id)
+   793→
+   794→    # تحويل lists إلى JSON strings
+   795→    for key in ['sources', 'interests', 'favorite_companies']:
+   796→        if key in updates and isinstance(updates[key], list):
+   797→            updates[key] = json.dumps(updates[key], ensure_ascii=False)
+   798→
+   799→    if 'subscribed' in updates:
+   800→        updates['subscribed'] = 1 if updates['subscribed'] else 0
+   801→
+   802→    updates['last_interaction'] = datetime.now().isoformat()
+   803→
+   804→    # ⚠️ SECURITY FIX: Validate column names against whitelist to prevent SQL injection
+   805→    invalid_keys = set(updates.keys()) - _ALLOWED_USER_COLUMNS
+   806→    if invalid_keys:
+   807→        logger.error(f"SECURITY: Rejected invalid column names in update_user(): {invalid_keys}")
+   808→        # Remove invalid keys instead of raising an exception (graceful degradation)
+   809→        for k in invalid_keys:
+   810→            del updates[k]
+   811→
+   812→    if not updates:
+   813→        return  # Nothing to update after filtering
+   814→
+   815→    ph = "%s" if _is_postgres() else "?"
+   816→    set_clause = ", ".join(f"{k} = {ph}" for k in updates.keys())
+   817→    values = list(updates.values()) + [user_id]
+   818→    _execute(f"UPDATE user_profiles SET {set_clause} WHERE user_id = {ph}", values)
+   819→
+   820→    # Legacy JSON sync removed — PostgreSQL/SQLite is the source of truth.
+   821→    # The old sync to users.json added unnecessary I/O overhead and
+   822→    # complexity. The JSON file is kept as read-only fallback only.
+   823→
+   824→
+   825→# ═══════════════════════════════════════
+   826→# إعدادات المستخدم - User Preferences
+   827→# ═══════════════════════════════════════
+   828→
+   829→# ⚠️ PERFORMANCE: Simple TTL cache to reduce database queries
+   830→# get_language() and get_user() are called on virtually every interaction.
+   831→# Caching these for a short duration reduces DB load by 60-80%.
+   832→_cache = {}  # {key: (value, expiry_timestamp)}
+   833→_CACHE_TTL = 120  # 2 minutes TTL for cached data
+   834→_cache_lock = threading.Lock()
+   835→
+   836→
+   837→def _cache_get(key: str):
+   838→    """Get a value from cache if not expired"""
+   839→    with _cache_lock:
+   840→        if key in _cache:
+   841→            value, expiry = _cache[key]
+   842→            if time.time() < expiry:
+   843→                return value
+   844→            else:
+   845→                del _cache[key]  # Expired
+   846→    return None
+   847→
+   848→
+   849→def _cache_set(key: str, value, ttl: int = None):
+   850→    """Set a value in cache with TTL"""
+   851→    if ttl is None:
+   852→        ttl = _CACHE_TTL
+   853→    with _cache_lock:
+   854→        _cache[key] = (value, time.time() + ttl)
+   855→        # Cleanup: remove expired entries if cache is large
+   856→        if len(_cache) > 500:
+   857→            now = time.time()
+   858→            expired_keys = [k for k, (_, exp) in _cache.items() if now >= exp]
+   859→            for k in expired_keys:
+   860→                del _cache[k]
+   861→
+   862→
+   863→def _cache_invalidate(key: str):
+   864→    """Invalidate a specific cache key"""
+   865→    with _cache_lock:
+   866→        _cache.pop(key, None)
+   867→
+   868→
+   869→def _cache_invalidate_user(user_id: int):
+   870→    """Invalidate all cache entries for a specific user"""
+   871→    with _cache_lock:
+   872→        keys_to_remove = [k for k in _cache if str(user_id) in k]
+   873→        for k in keys_to_remove:
+   874→            del _cache[k]
+   875→
+   876→
+   877→def get_language(user_id: int) -> str:
+   878→    """الحصول على لغة المستخدم — مع caching لتقليل ضغط قاعدة البيانات"""
+   879→    cache_key = f"lang_{user_id}"
+   880→    cached = _cache_get(cache_key)
+   881→    if cached is not None:
+   882→        return cached
+   883→    user = get_user(user_id)
+   884→    lang = user.get("language", "ar")
+   885→    _cache_set(cache_key, lang, ttl=300)  # Language rarely changes — 5 min cache
+   886→    return lang
+   887→
+   888→def set_language(user_id: int, language: str):
+   889→    update_user(user_id, {"language": language})
+   890→    _cache_invalidate(f"lang_{user_id}")
+   891→    _cache_invalidate(f"user_{user_id}")
+   892→
+   893→def get_news_time(user_id: int) -> str:
+   894→    user = get_user(user_id)
+   895→    return user.get("news_time", "12:00")
+   896→
+   897→def set_news_time(user_id: int, time_str: str):
+   898→    update_user(user_id, {"news_time": time_str})
+   899→    _cache_invalidate(f"user_{user_id}")
+   900→
+   901→def get_sources(user_id: int) -> list:
+   902→    user = get_user(user_id)
+   903→    return user.get("sources", [])
+   904→
+   905→def set_sources(user_id: int, sources: list):
+   906→    update_user(user_id, {"sources": sources})
+   907→    _cache_invalidate(f"user_{user_id}")
+   908→
+   909→
+   910→# ═══════════════════════════════════════
+   911→# الاشتراك - Subscription
+   912→# ═══════════════════════════════════════
+   913→
+   914→def subscribe_user(user_id: int):
+   915→    update_user(user_id, {"subscribed": True})
+   916→    _cache_invalidate(f"user_{user_id}")
+   917→
+   918→def unsubscribe_user(user_id: int):
+   919→    update_user(user_id, {"subscribed": False})
+   920→    _cache_invalidate(f"user_{user_id}")
+   921→
+   922→def is_subscribed(user_id: int) -> bool:
+   923→    user = get_user(user_id)
+   924→    return user.get("subscribed", False)
+   925→
+   926→def get_all_subscribers(platform: str = None) -> List[Dict]:
+   927→    """Get all news subscribers, optionally filtered by platform"""
+   928→    if platform:
+   929→        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+   930→        rows = _execute(
+   931→            f"SELECT user_id, language, news_time, name FROM user_profiles WHERE subscribed = {ph1} AND platform = {ph2}",
+   932→            (1, platform), fetch=True
+   933→        )
+   934→    else:
+   935→        ph = "%s" if _is_postgres() else "?"
+   936→        rows = _execute(f"SELECT user_id, language, news_time, name FROM user_profiles WHERE subscribed = {ph}", (1,), fetch=True)
+   937→    if rows:
+   938→        if _is_postgres():
+   939→            result = []
+   940→            for row in rows:
+   941→                result.append({"user_id": row[0], "language": row[1], "news_time": row[2], "name": row[3]})
+   942→            return result
+   943→        return [dict(r) for r in rows]
+   944→    # fallback
+   945→    all_users = _load_all_users()
+   946→    subscribers = []
+   947→    for uid, data in all_users.items():
+   948→        if data.get("subscribed", False):
+   949→            if platform and data.get("platform") != platform:
+   950→                continue
+   951→            subscribers.append({
+   952→                "user_id": int(uid), "language": data.get("language", "ar"),
+   953→                "news_time": data.get("news_time", "12:00"), "name": data.get("name", ""),
+   954→            })
+   955→    return subscribers
+   956→
+   957→def get_subscriber_count() -> int:
+   958→    return len(get_all_subscribers())
+   959→
+   960→def increment_command_count(user_id: int):
+   961→    _ensure_user_in_db(user_id)
+   962→    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+   963→    _execute(
+   964→        f"UPDATE user_profiles SET commands_used = commands_used + 1, last_interaction = {ph1} WHERE user_id = {ph2}",
+   965→        (datetime.now().isoformat(), user_id)
+   966→    )
+   967→
+   968→def increment_chat_count(user_id: int):
+   969→    _ensure_user_in_db(user_id)
+   970→    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+   971→    _execute(
+   972→        f"UPDATE user_profiles SET chat_count = chat_count + 1, last_interaction = {ph1} WHERE user_id = {ph2}",
+   973→        (datetime.now().isoformat(), user_id)
+   974→    )
+   975→
+   976→
+   977→# ═══════════════════════════════════════
+   978→# ذاكرة المحادثات - Conversation Memory
+   979→# ═══════════════════════════════════════
+   980→
+   981→MAX_CONVERSATIONS = 50
+   982→
+   983→def save_conversation(user_id: int, role: str, content: str):
+   984→    """حفظ رسالة في ذاكرة المحادثات"""
+   985→    _ensure_user_in_db(user_id)
+   986→    ph1, ph2, ph3, ph4 = ("%s", "%s", "%s", "%s") if _is_postgres() else ("?", "?", "?", "?")
+   987→    _execute(
+   988→        f"INSERT INTO conversations (user_id, role, content, timestamp) VALUES ({ph1}, {ph2}, {ph3}, {ph4})",
+   989→        (user_id, role, content[:1000], datetime.now().isoformat())
+   990→    )
+   991→    # حذف القديم لو عدى الحد
+   992→    ph_u, ph_l = ("%s", "%s") if _is_postgres() else ("?", "?")
+   993→    if _is_postgres():
+   994→        _execute(
+   995→            """DELETE FROM conversations WHERE id IN (
+   996→                SELECT id FROM conversations WHERE user_id = %s
+   997→                ORDER BY timestamp DESC OFFSET %s
+   998→            )""",
+   999→            (user_id, MAX_CONVERSATIONS)
+  1000→        )
+  1001→    else:
+  1002→        _execute(
+  1003→            """DELETE FROM conversations WHERE id IN (
+  1004→                SELECT id FROM conversations WHERE user_id = ?
+  1005→                ORDER BY timestamp DESC LIMIT -1 OFFSET ?
+  1006→            )""",
+  1007→            (user_id, MAX_CONVERSATIONS)
+  1008→        )
+  1009→
+  1010→
+  1011→def get_recent_conversations(user_id: int, limit: int = 10) -> List[Dict]:
+  1012→    """الحصول على آخر محادثات المستخدم"""
+  1013→    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1014→    rows = _execute(
+  1015→        f"SELECT role, content, timestamp FROM conversations WHERE user_id = {ph1} ORDER BY timestamp DESC LIMIT {ph2}",
+  1016→        (user_id, limit),
+  1017→        fetch=True
+  1018→    )
+  1019→    if rows:
+  1020→        if _is_postgres():
+  1021→            return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in rows]
+  1022→        return [dict(r) for r in rows]
+  1023→    return []
+  1024→
+  1025→
+  1026→def get_conversation_context(user_id: int, limit: int = 6) -> str:
+  1027→    """الحصول على سياق المحادثة كنص للـ AI"""
+  1028→    convos = get_recent_conversations(user_id, limit)
+  1029→    if not convos:
+  1030→        return ""
+  1031→    context_parts = []
+  1032→    for c in reversed(convos):
+  1033→        role = "User" if c['role'] == 'user' else "Bot"
+  1034→        context_parts.append(f"{role}: {c['content'][:200]}")
+  1035→    return "\n".join(context_parts)
+  1036→
+  1037→
+  1038→# ═══════════════════════════════════════
+  1039→# ذاكرة التعلم - Learning Memory
+  1040→# ═══════════════════════════════════════
+  1041→
+  1042→def save_learning(user_id: int, topic: str, level: str = "explored"):
+  1043→    """حفظ تقدم التعلم"""
+  1044→    _ensure_user_in_db(user_id)
+  1045→    now = datetime.now().isoformat()
+  1046→    if _is_postgres():
+  1047→        _execute(
+  1048→            """INSERT INTO learning_progress (user_id, topic, level, learned_at)
+  1049→            VALUES (%s, %s, %s, %s)
+  1050→            ON CONFLICT(user_id, topic) DO UPDATE SET level = %s, learned_at = %s""",
+  1051→            (user_id, topic, level, now, level, now)
+  1052→        )
+  1053→    else:
+  1054→        _execute(
+  1055→            """INSERT INTO learning_progress (user_id, topic, level, learned_at)
+  1056→            VALUES (?, ?, ?, ?)
+  1057→            ON CONFLICT(user_id, topic) DO UPDATE SET level = ?, learned_at = ?""",
+  1058→            (user_id, topic, level, now, level, now)
+  1059→        )
+  1060→
+  1061→
+  1062→def get_learning_progress(user_id: int) -> List[Dict]:
+  1063→    """الحصول على كل تقدم التعلم"""
+  1064→    ph = "%s" if _is_postgres() else "?"
+  1065→    rows = _execute(
+  1066→        f"SELECT topic, level, learned_at FROM learning_progress WHERE user_id = {ph} ORDER BY learned_at DESC",
+  1067→        (user_id,),
+  1068→        fetch=True
+  1069→    )
+  1070→    if rows:
+  1071→        if _is_postgres():
+  1072→            return [{"topic": r[0], "level": r[1], "learned_at": r[2]} for r in rows]
+  1073→        return [dict(r) for r in rows]
+  1074→    return []
+  1075→
+  1076→
+  1077→def get_learned_topics(user_id: int) -> List[str]:
+  1078→    """الحصول على قائمة المواضيع المتعلمة"""
+  1079→    progress = get_learning_progress(user_id)
+  1080→    return [p['topic'] for p in progress]
+  1081→
+  1082→
+  1083→# ═══════════════════════════════════════
+  1084→# نظام المفضلات - Favorites System
+  1085→# ═══════════════════════════════════════
+  1086→
+  1087→def add_favorite(user_id: int, category: str, title: str, content: str = "", url: str = ""):
+  1088→    """إضافة عنصر للمفضلات"""
+  1089→    _ensure_user_in_db(user_id)
+  1090→    ph1, ph2, ph3, ph4, ph5, ph6 = (["%s"] * 6) if _is_postgres() else (["?"] * 6)
+  1091→    _execute(
+  1092→        f"INSERT INTO favorites (user_id, category, title, content, url, saved_at) VALUES ({', '.join(ph1)})",
+  1093→        (user_id, category, title, content[:500], url, datetime.now().isoformat())
+  1094→    )
+  1095→
+  1096→
+  1097→def get_favorites(user_id: int, category: str = None) -> List[Dict]:
+  1098→    """الحصول على المفضلات"""
+  1099→    if category:
+  1100→        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1101→        rows = _execute(
+  1102→            f"SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = {ph1} AND category = {ph2} ORDER BY saved_at DESC",
+  1103→            (user_id, category),
+  1104→            fetch=True
+  1105→        )
+  1106→    else:
+  1107→        ph = "%s" if _is_postgres() else "?"
+  1108→        rows = _execute(
+  1109→            f"SELECT id, category, title, content, url, saved_at FROM favorites WHERE user_id = {ph} ORDER BY saved_at DESC",
+  1110→            (user_id,),
+  1111→            fetch=True
+  1112→        )
+  1113→    if rows:
+  1114→        if _is_postgres():
+  1115→            return [{"id": r[0], "category": r[1], "title": r[2], "content": r[3], "url": r[4], "saved_at": r[5]} for r in rows]
+  1116→        return [dict(r) for r in rows]
+  1117→    return []
+  1118→
+  1119→
+  1120→def remove_favorite(user_id: int, favorite_id: int):
+  1121→    """حذف عنصر من المفضلات"""
+  1122→    ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1123→    _execute(f"DELETE FROM favorites WHERE id = {ph1} AND user_id = {ph2}", (favorite_id, user_id))
+  1124→
+  1125→
+  1126→# ═══════════════════════════════════════
+  1127→# الذاكرة الذكية - Smart Memory
+  1128→# ═══════════════════════════════════════
+  1129→
+  1130→def save_memory(user_id: int, key: str, value: str, category: str = "general"):
+  1131→    """حفظ ذكرى في الذاكرة الذكية"""
+  1132→    _ensure_user_in_db(user_id)
+  1133→    now = datetime.now().isoformat()
+  1134→    if _is_postgres():
+  1135→        _execute(
+  1136→            """INSERT INTO user_memories (user_id, key, value, category, created_at)
+  1137→            VALUES (%s, %s, %s, %s, %s)
+  1138→            ON CONFLICT(user_id, key) DO UPDATE SET value = %s, category = %s""",
+  1139→            (user_id, key, value, category, now, value, category)
+  1140→        )
+  1141→    else:
+  1142→        _execute(
+  1143→            """INSERT INTO user_memories (user_id, key, value, category, created_at)
+  1144→            VALUES (?, ?, ?, ?, ?)
+  1145→            ON CONFLICT(user_id, key) DO UPDATE SET value = ?, category = ?""",
+  1146→            (user_id, key, value, category, now, value, category)
+  1147→        )
+  1148→
+  1149→
+  1150→def get_memories(user_id: int, category: str = None) -> List[Dict]:
+  1151→    """الحصول على الذكريات"""
+  1152→    if category:
+  1153→        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1154→        rows = _execute(
+  1155→            f"SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = {ph1} AND category = {ph2} ORDER BY created_at DESC",
+  1156→            (user_id, category),
+  1157→            fetch=True
+  1158→        )
+  1159→    else:
+  1160→        ph = "%s" if _is_postgres() else "?"
+  1161→        rows = _execute(
+  1162→            f"SELECT id, key, value, category, created_at FROM user_memories WHERE user_id = {ph} ORDER BY created_at DESC",
+  1163→            (user_id,),
+  1164→            fetch=True
+  1165→        )
+  1166→    if rows:
+  1167→        if _is_postgres():
+  1168→            return [{"id": r[0], "key": r[1], "value": r[2], "category": r[3], "created_at": r[4]} for r in rows]
+  1169→        return [dict(r) for r in rows]
+  1170→    return []
+  1171→
+  1172→
+  1173→def delete_memory(user_id: int, key: str = None, memory_id: int = None):
+  1174→    """حذف ذكرى محددة"""
+  1175→    if memory_id:
+  1176→        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1177→        _execute(f"DELETE FROM user_memories WHERE id = {ph1} AND user_id = {ph2}", (memory_id, user_id))
+  1178→    elif key:
+  1179→        ph1, ph2 = ("%s", "%s") if _is_postgres() else ("?", "?")
+  1180→        _execute(f"DELETE FROM user_memories WHERE key LIKE {ph1} AND user_id = {ph2}", (f"%{key}%", user_id))
+  1181→
+  1182→
+  1183→def reset_all_memories(user_id: int):
+  1184→    """حذف كل الذكريات"""
+  1185→    ph = "%s" if _is_postgres() else "?"
+  1186→    _execute(f"DELETE FROM conversations WHERE user_id = {ph}", (user_id,))
+  1187→    _execute(f"DELETE FROM learning_progress WHERE user_id = {ph}", (user_id,))
+  1188→    _execute(f"DELETE FROM favorites WHERE user_id = {ph}", (user_id,))
+  1189→    _execute(f"DELETE FROM user_memories WHERE user_id = {ph}", (user_id,))
+  1190→
+  1191→
+  1192→# ═══════════════════════════════════════
+  1193→# الاهتمامات - Interests
+  1194→# ═══════════════════════════════════════
+  1195→
+  1196→def add_interest(user_id: int, interest: str):
+  1197→    """إضافة اهتمام جديد"""
+  1198→    user = get_user(user_id)
+  1199→    interests = user.get("interests", [])
+  1200→    interest_lower = interest.lower().strip()
+  1201→    if interest_lower not in [i.lower() for i in interests]:
+  1202→        interests.append(interest)
+  1203→        update_user(user_id, {"interests": interests})
+  1204→        save_memory(user_id, f"interest_{interest_lower}", interest, "interests")
+  1205→
+  1206→
+  1207→def get_interests(user_id: int) -> List[str]:
+  1208→    """الحصول على اهتمامات المستخدم"""
+  1209→    user = get_user(user_id)
+  1210→    return user.get("interests", [])
+  1211→
+  1212→
+  1213→def get_interests_context(user_id: int) -> str:
+  1214→    """الحصول على سياق الاهتمامات للـ AI"""
+  1215→    interests = get_interests(user_id)
+  1216→    if not interests:
+  1217→        return ""
+  1218→    return ", ".join(interests)
+  1219→
+  1220→
+  1221→def add_favorite_company(user_id: int, company: str):
+  1222→    """إضافة شركة مفضلة"""
+  1223→    user = get_user(user_id)
+  1224→    companies = user.get("favorite_companies", [])
+  1225→    if company.lower() not in [c.lower() for c in companies]:
+  1226→        companies.append(company)
+  1227→        update_user(user_id, {"favorite_companies": companies})
+  1228→
+  1229→
+  1230→def get_favorite_companies(user_id: int) -> List[str]:
+  1231→    """الحصول على الشركات المفضلة"""
+  1232→    user = get_user(user_id)
+  1233→    return user.get("favorite_companies", [])
+  1234→
+  1235→
+  1236→# ═══════════════════════════════════════
+  1237→# كشف الاهتمامات تلقائياً - Auto-Detect Interests
+  1238→# ═══════════════════════════════════════
+  1239→
+  1240→INTEREST_KEYWORDS = {
+  1241→    "openai": "OpenAI", "chatgpt": "ChatGPT", "gpt-4": "GPT-4", "gpt-5": "GPT-5",
+  1242→    "claude": "Claude", "anthropic": "Anthropic", "gemini": "Gemini",
+  1243→    "deepmind": "DeepMind", "llama": "Llama", "meta ai": "Meta AI",
+  1244→    "copilot": "Copilot", "grok": "Grok", "xai": "xAI",
+  1245→    "midjourney": "Midjourney", "sora": "Sora", "dall-e": "DALL-E",
+  1246→    "ai agents": "AI Agents", "agent": "AI Agents", "autonomous ai": "AI Agents",
+  1247→    "llm": "LLM", "large language model": "LLM", "transformer": "Transformers",
+  1248→    "nlp": "NLP", "natural language": "NLP",
+  1249→    "computer vision": "Computer Vision", "cv": "Computer Vision",
+  1250→    "reinforcement learning": "Reinforcement Learning", "rlhf": "RLHF",
+  1251→    "prompt engineering": "Prompt Engineering", "rag": "RAG",
+  1252→    "fine-tuning": "Fine-tuning", "diffusion model": "Diffusion Models",
+  1253→    "robot": "Robotics", "humanoid": "Humanoid Robots",
+  1254→    "nvidia": "NVIDIA", "gpu": "GPU Computing", "ai chip": "AI Hardware",
+  1255→    "ai safety": "AI Safety", "agi": "AGI",
+  1256→    "machine learning": "Machine Learning", "deep learning": "Deep Learning",
+  1257→    "python": "Python", "nextjs": "Next.js", "react": "React",
+  1258→    "typescript": "TypeScript", "docker": "Docker",
+  1259→    "web development": "Web Development", "frontend": "Frontend Development",
+  1260→    "backend": "Backend Development", "fullstack": "Full-Stack Development",
+  1261→    "devops": "DevOps", "cloud computing": "Cloud Computing",
+  1262→    "cybersecurity": "Cybersecurity", "data science": "Data Science",
+  1263→    "data engineering": "Data Engineering", "mlops": "MLOps",
+  1264→    "ai ethics": "AI Ethics", "sustainability": "Green AI",
+  1265→    "edge ai": "Edge AI", "on-device ai": "On-Device AI",
+  1266→    "ai art": "AI Art", "ai music": "AI Music",
+  1267→    "ai writing": "AI Writing", "chatbot": "Chatbots",
+  1268→    "voice assistant": "Voice Assistants",
+  1269→}
+  1270→
+  1271→COMPANY_KEYWORDS = {
+  1272→    "openai": "OpenAI", "google": "Google", "anthropic": "Anthropic",
+  1273→    "microsoft": "Microsoft", "meta": "Meta", "xai": "xAI",
+  1274→    "nvidia": "NVIDIA", "deepmind": "DeepMind", "mistral": "Mistral AI",
+  1275→}
+  1276→
+  1277→
+  1278→def detect_interests(user_id: int, text: str):
+  1279→    """كشف وحفظ الاهتمامات تلقائياً من نص المستخدم"""
+  1280→    text_lower = text.lower()
+  1281→    for keyword, interest in INTEREST_KEYWORDS.items():
+  1282→        if keyword in text_lower:
+  1283→            add_interest(user_id, interest)
+  1284→    for keyword, company in COMPANY_KEYWORDS.items():
+  1285→        if keyword in text_lower:
+  1286→            add_favorite_company(user_id, company)
+  1287→
+  1288→
+  1289→# ═══════════════════════════════════════
+  1290→# ملخص الذاكرة للـ AI - Memory Summary for AI
+  1291→# ═══════════════════════════════════════
+  1292→
+  1293→def get_user_memory_summary(user_id: int, lang: str = "ar") -> str:
+  1294→    """تجهيز ملخص الذاكرة لحقنه في system prompt"""
+  1295→    parts = []
+  1296→
+  1297→    # الاهتمامات
+  1298→    interests = get_interests(user_id)
+  1299→    if interests:
+  1300→        if lang == "ar":
+  1301→            parts.append(f"اهتمامات المستخدم: {', '.join(interests[:15])}")
+  1302→        else:
+  1303→            parts.append(f"User interests: {', '.join(interests[:15])}")
+  1304→
+  1305→    # الشركات المفضلة
+  1306→    companies = get_favorite_companies(user_id)
+  1307→    if companies:
+  1308→        if lang == "ar":
+  1309→            parts.append(f"شركات يتابعها: {', '.join(companies[:10])}")
+  1310→        else:
+  1311→            parts.append(f"Followed companies: {', '.join(companies[:10])}")
+  1312→
+  1313→    # المواضيع المتعلمة
+  1314→    learned = get_learned_topics(user_id)
+  1315→    if learned:
+  1316→        if lang == "ar":
+  1317→            parts.append(f"مواضيع تعلمها: {', '.join(learned[:10])}")
+  1318→        else:
+  1319→            parts.append(f"Learned topics: {', '.join(learned[:10])}")
+  1320→
+  1321→    # آخر محادثات (مختصر)
+  1322→    recent = get_recent_conversations(user_id, 4)
+  1323→    if recent:
+  1324→        if lang == "ar":
+  1325→            parts.append("آخر مواضيع تحدث عنها:")
+  1326→        else:
+  1327→            parts.append("Recent conversation topics:")
+  1328→        for c in recent[:4]:
+  1329→            prefix = "👤" if c['role'] == 'user' else "🤖"
+  1330→            parts.append(f"  {prefix} {c['content'][:80]}")
+  1331→
+  1332→    return "\n".join(parts) if parts else ""
+  1333→
+  1334→
+  1335→# ═══════════════════════════════════════
+  1336→# عرض الذاكرة - Memory Display
+  1337→# ═══════════════════════════════════════
+  1338→
+  1339→def format_memory_display(user_id: int, lang: str = "ar") -> str:
+  1340→    """تنسيق عرض الذاكرة للمستخدم"""
+  1341→    user = get_user(user_id)
+  1342→    interests = get_interests(user_id)
+  1343→    companies = get_favorite_companies(user_id)
+  1344→    learning = get_learning_progress(user_id)
+  1345→    favorites = get_favorites(user_id)
+  1346→    conversations = get_recent_conversations(user_id, 5)
+  1347→    memories = get_memories(user_id)
+  1348→
+  1349→    # Check if user is admin
+  1350→    is_user_admin = False
+  1351→    try:
+  1352→        from admin import is_admin
+  1353→        is_user_admin = is_admin(user_id)
+  1354→    except Exception:
+  1355→        pass
+  1356→
+  1357→    # Get plan info
+  1358→    plan = "free"
+  1359→    try:
+  1360→        from premium import get_user_plan
+  1361→        plan = get_user_plan(user_id)
+  1362→    except Exception:
+  1363→        pass
+  1364→
+  1365→    if lang == "ar":
+  1366→        text = "🧠 <b>ذاكرتي عنك</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1367→
+  1368→        if is_user_admin:
+  1369→            text += "👑 <b>الرتبة:</b> أدمن (مالك البوت)\n"
+  1370→            text += "⭐ <b>الخطة:</b> Premium (أدمن — مفيش Limits)\n"
+  1371→        else:
+  1372→            plan_display = "⭐ Premium" if plan in ("premium", "premium_plus") else "🆓 مجاني"
+  1373→            text += f"👤 <b>الخطة:</b> {plan_display}\n"
+  1374→
+  1375→        text += f"👤 <b>الاسم:</b> {user.get('name', 'مش محدد')}\n"
+  1376→        text += f"🌐 <b>اللغة:</b> {'العربية' if user.get('language') == 'ar' else 'English'}\n"
+  1377→        text += f"📬 <b>مشترك:</b> {'نعم' if user.get('subscribed') else 'لا'}\n"
+  1378→        # 🔴 FIX: شلنا عداد المحادثات والأوامر وعرض الحدود — دول موجودين في زر الخطة وحدود الاستخدام
+  1379→        text += "\n"
+  1380→
+  1381→        if not is_user_admin and plan == "free":
+  1382→            text += "📊 <i>شوف حدود استخدامك من زر \"📋 الخطة وحدود الاستخدام\"</i>\n\n"
+  1383→        elif plan in ("premium", "premium_plus") and not is_user_admin:
+  1384→            text += "⭐ <i>مشترك Premium — استخدام غير محدود!</i>\n\n"
+  1385→
+  1386→        if interests:
+  1387→            text += "🎯 <b>اهتماماتك:</b>\n"
+  1388→            for i in interests[:15]:
+  1389→                text += f"  • {i}\n"
+  1390→            text += "\n"
+  1391→
+  1392→        if companies:
+  1393→            text += "🏢 <b>شركات تتابعها:</b>\n"
+  1394→            for c in companies[:10]:
+  1395→                text += f"  • {c}\n"
+  1396→            text += "\n"
+  1397→
+  1398→        if learning:
+  1399→            text += "📚 <b>مواضيع تعلمتها:</b>\n"
+  1400→            for l in learning[:10]:
+  1401→                level_emoji = {"explored": "👀", "learning": "📖", "learned": "✅"}.get(l.get('level', ''), '👀')
+  1402→                text += f"  {level_emoji} {l['topic']}\n"
+  1403→            text += "\n"
+  1404→
+  1405→        if favorites:
+  1406→            text += f"⭐ <b>المفضلات:</b> {len(favorites)} عنصر\n\n"
+  1407→
+  1408→        if memories:
+  1409→            text += f"💾 <b>ذكريات محفوظة:</b> {len(memories)}\n"
+  1410→
+  1411→        if not interests and not learning and not favorites:
+  1412→            text += "💭 <i>لسه بتعرف عليك! استخدم البوت وهفتكر كل حاجة عنك.</i>"
+  1413→
+  1414→    else:
+  1415→        text = "🧠 <b>My Memory About You</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1416→
+  1417→        if is_user_admin:
+  1418→            text += "👑 <b>Role:</b> Admin (Bot Owner)\n"
+  1419→            text += "⭐ <b>Plan:</b> Premium (Admin — No Limits)\n"
+  1420→        else:
+  1421→            plan_display = "⭐ Premium" if plan in ("premium", "premium_plus") else "🆓 Free"
+  1422→            text += f"👤 <b>Plan:</b> {plan_display}\n"
+  1423→
+  1424→        text += f"👤 <b>Name:</b> {user.get('name', 'Not set')}\n"
+  1425→        text += f"🌐 <b>Language:</b> {'Arabic' if user.get('language') == 'ar' else 'English'}\n"
+  1426→        text += f"📬 <b>Subscribed:</b> {'Yes' if user.get('subscribed') else 'No'}\n"
+  1427→        # 🔴 FIX: removed usage counters and limits — they're in the Plan & Usage button
+  1428→        text += "\n"
+  1429→
+  1430→        if not is_user_admin and plan == "free":
+  1431→            text += "📊 <i>Check your usage limits from \"📋 Plan & Usage\" button</i>\n\n"
+  1432→        elif plan in ("premium", "premium_plus") and not is_user_admin:
+  1433→            text += "⭐ <i>Premium subscriber — unlimited usage!</i>\n\n"
+  1434→
+  1435→        if interests:
+  1436→            text += "🎯 <b>Your Interests:</b>\n"
+  1437→            for i in interests[:15]:
+  1438→                text += f"  • {i}\n"
+  1439→            text += "\n"
+  1440→
+  1441→        if companies:
+  1442→            text += "🏢 <b>Companies You Follow:</b>\n"
+  1443→            for c in companies[:10]:
+  1444→                text += f"  • {c}\n"
+  1445→            text += "\n"
+  1446→
+  1447→        if learning:
+  1448→            text += "📚 <b>Topics Learned:</b>\n"
+  1449→            for l in learning[:10]:
+  1450→                level_emoji = {"explored": "👀", "learning": "📖", "learned": "✅"}.get(l.get('level', ''), '👀')
+  1451→                text += f"  {level_emoji} {l['topic']}\n"
+  1452→            text += "\n"
+  1453→
+  1454→        if favorites:
+  1455→            text += f"⭐ <b>Favorites:</b> {len(favorites)} items\n\n"
+  1456→
+  1457→        if memories:
+  1458→            text += f"💾 <b>Saved Memories:</b> {len(memories)}\n"
+  1459→
+  1460→        if not interests and not learning and not favorites:
+  1461→            text += "💭 <i>I'm still getting to know you! Use the bot and I'll remember everything.</i>"
+  1462→
+  1463→    return text
+  1464→
+  1465→
+  1466→def format_progress_display(user_id: int, lang: str = "ar") -> str:
+  1467→    """تنسيق عرض تقدم التعلم"""
+  1468→    learning = get_learning_progress(user_id)
+  1469→
+  1470→    if lang == "ar":
+  1471→        text = "📚 <b>تقدمك في التعلم</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1472→        if not learning:
+  1473→            text += "💭 لسه متعلمتش أي موضوع.\n💡 جرب أمر <code>/learn transformers</code> وهاحفظ تقدمك!"
+  1474→        else:
+  1475→            explored = [l for l in learning if l.get('level') == 'explored']
+  1476→            learning_in_progress = [l for l in learning if l.get('level') == 'learning']
+  1477→            learned = [l for l in learning if l.get('level') == 'learned']
+  1478→
+  1479→            if explored:
+  1480→                text += f"👀 <b>استكشفت ({len(explored)}):</b>\n"
+  1481→                for l in explored[:10]:
+  1482→                    text += f"  • {l['topic']}\n"
+  1483→                text += "\n"
+  1484→
+  1485→            if learning_in_progress:
+  1486→                text += f"📖 <b>بتتعلم حالياً ({len(learning_in_progress)}):</b>\n"
+  1487→                for l in learning_in_progress[:10]:
+  1488→                    text += f"  • {l['topic']}\n"
+  1489→                text += "\n"
+  1490→
+  1491→            if learned:
+  1492→                text += f"✅ <b>اتعلمت ({len(learned)}):</b>\n"
+  1493→                for l in learned[:10]:
+  1494→                    text += f"  • {l['topic']}\n"
+  1495→                text += "\n"
+  1496→
+  1497→            text += f"📊 <b>الإجمالي:</b> {len(learning)} موضوع"
+  1498→    else:
+  1499→        text = "📚 <b>Your Learning Progress</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1500→        if not learning:
+  1501→            text += "💭 You haven't learned any topics yet.\n💡 Try <code>/learn transformers</code> and I'll track your progress!"
+  1502→        else:
+  1503→            explored = [l for l in learning if l.get('level') == 'explored']
+  1504→            learning_in_progress = [l for l in learning if l.get('level') == 'learning']
+  1505→            learned = [l for l in learning if l.get('level') == 'learned']
+  1506→
+  1507→            if explored:
+  1508→                text += f"👀 <b>Explored ({len(explored)}):</b>\n"
+  1509→                for l in explored[:10]:
+  1510→                    text += f"  • {l['topic']}\n"
+  1511→                text += "\n"
+  1512→
+  1513→            if learning_in_progress:
+  1514→                text += f"📖 <b>Currently Learning ({len(learning_in_progress)}):</b>\n"
+  1515→                for l in learning_in_progress[:10]:
+  1516→                    text += f"  • {l['topic']}\n"
+  1517→                text += "\n"
+  1518→
+  1519→            if learned:
+  1520→                text += f"✅ <b>Learned ({len(learned)}):</b>\n"
+  1521→                for l in learned[:10]:
+  1522→                    text += f"  • {l['topic']}\n"
+  1523→                text += "\n"
+  1524→
+  1525→            text += f"📊 <b>Total:</b> {len(learning)} topics"
+  1526→
+  1527→    return text
+  1528→
+  1529→
+  1530→def format_favorites_display(user_id: int, lang: str = "ar") -> str:
+  1531→    """تنسيق عرض المفضلات"""
+  1532→    favorites = get_favorites(user_id)
+  1533→
+  1534→    if lang == "ar":
+  1535→        text = "⭐ <b>المفضلات</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1536→        if not favorites:
+  1537→            text += "💭 معندكش مفضلات لسه.\n💡 استخدم أمر <code>/favorite</code> عشان تحفظ أي حاجة!"
+  1538→        else:
+  1539→            categories = {}
+  1540→            for f in favorites:
+  1541→                cat = f.get('category', 'other')
+  1542→                if cat not in categories:
+  1543→                    categories[cat] = []
+  1544→                categories[cat].append(f)
+  1545→
+  1546→            cat_names = {
+  1547→                "news": "📰 أخبار", "topic": "📚 مواضيع",
+  1548→                "tool": "🔧 أدوات", "company": "🏢 شركات", "other": "📌 أخرى"
+  1549→            }
+  1550→
+  1551→            for cat, items in categories.items():
+  1552→                cat_name = cat_names.get(cat, cat)
+  1553→                text += f"{cat_name} ({len(items)}):\n"
+  1554→                for item in items[:5]:
+  1555→                    text += f"  • {item['title'][:60]}\n"
+  1556→                text += "\n"
+  1557→
+  1558→            text += f"📊 الإجمالي: {len(favorites)} عنصر"
+  1559→    else:
+  1560→        text = "⭐ <b>Your Favorites</b>\n━━━━━━━━━━━━━━━━━\n\n"
+  1561→        if not favorites:
+  1562→            text += "💭 No favorites yet.\n💡 Use <code>/favorite</code> to save anything!"
+  1563→        else:
+  1564→            categories = {}
+  1565→            for f in favorites:
+  1566→                cat = f.get('category', 'other')
+  1567→                if cat not in categories:
+  1568→                    categories[cat] = []
+  1569→                categories[cat].append(f)
+  1570→
+  1571→            cat_names = {
+  1572→                "news": "📰 News", "topic": "📚 Topics",
+  1573→                "tool": "🔧 Tools", "company": "🏢 Companies", "other": "📌 Other"
+  1574→            }
+  1575→
+  1576→            for cat, items in categories.items():
+  1577→                cat_name = cat_names.get(cat, cat)
+  1578→                text += f"{cat_name} ({len(items)}):\n"
+  1579→                for item in items[:5]:
+  1580→                    text += f"  • {item['title'][:60]}\n"
+  1581→                text += "\n"
+  1582→
+  1583→            text += f"📊 Total: {len(favorites)} items"
+  1584→
+  1585→    return text
+  1586→
+  1587→
+  1588→# ═══════════════════════════════════════
+  1589→# إعدادات الإشعارات - Notification Settings
+  1590→# ═══════════════════════════════════════
+  1591→
+  1592→def get_notification_enabled(user_id: int) -> bool:
+  1593→    """هل الإشعارات مفعلة للمستخدم"""
+  1594→    user = get_user(user_id)
+  1595→    return bool(user.get("notification_enabled", 1))
+  1596→
+  1597→def set_notification_enabled(user_id: int, enabled: bool):
+  1598→    """تفعيل/إيقاف الإشعارات"""
+  1599→    update_user(user_id, {"notification_enabled": 1 if enabled else 0})
+  1600→
+  1601→
+  1602→# ═══════════════════════════════════════
+  1603→# الذاكرة الذكية المتقدمة - Advanced Smart Memory
+  1604→# ═══════════════════════════════════════
+  1605→
+  1606→# كلمات تدل على تفضيل واضح من المستخدم
+  1607→PREFERENCE_PATTERNS_AR = [
+  1608→    "بحب", "بعشق", "بفضل", "أحب", "عايز", "محتاج", "محتاجة",
+  1609→    "مفضلتي", "تفضيلي", "حبيبي", "أكتر حاجة",
+  1610→]
+  1611→PREFERENCE_PATTERNS_EN = [
+  1612→    "i love", "i like", "i prefer", "my favorite", "i want",
+  1613→    "i need", "my preference", "i enjoy", "i'm into",
+  1614→]
+  1615→
+  1616→# بيانات حساسة لا يتم حفظها أبداً
+  1617→SENSITIVE_PATTERNS = [
+  1618→    "password", "كلمة سر", "باسورد", "pin", "رمز سري",
+  1619→    "api key", "مفتاح", "token", "توكين",
+  1620→    "credit card", "بطاقة ائتمان", "visa", "mastercard",
+  1621→    "ssn", "رقم ضمان", "رقم قومي",
+  1622→    "private key", "مفتاح خاص", "secret", "سر",
+  1623→]
+  1624→
+  1625→
+  1626→def is_sensitive(text: str) -> bool:
+  1627→    """فحص هل النص يحتوي على بيانات حساسة"""
+  1628→    text_lower = text.lower()
+  1629→    for pattern in SENSITIVE_PATTERNS:
+  1630→        if pattern in text_lower:
+  1631→            return True
+  1632→    return False
+  1633→
+  1634→
+  1635→def has_preference_intent(text: str) -> bool:
+  1636→    """كشف هل المستخدم بيعبر عن تفضيل واضح"""
+  1637→    text_lower = text.lower()
+  1638→    for pattern in PREFERENCE_PATTERNS_AR:
+  1639→        if pattern in text_lower:
+  1640→            return True
+  1641→    for pattern in PREFERENCE_PATTERNS_EN:
+  1642→        if pattern in text_lower:
+  1643→            return True
+  1644→    return False
+  1645→
+  1646→
+  1647→def smart_save(user_id: int, text: str, role: str = "user"):
+  1648→    """
+  1649→    حفظ ذكي - بيحفظ بس المهم والحساس
+  1650→    - بيتجنب البيانات الحساسة
+  1651→    - بيفحص تفضيلات المستخدم
+  1652→    - بيحفظ الاهتمامات تلقائياً
+  1653→    """
+  1654→    if is_sensitive(text):
+  1655→        logger.debug(f"Skipping sensitive content for user {user_id}")
+  1656→        return
+  1657→
+  1658→    # حفظ المحادثة
+  1659→    save_conversation(user_id, role, text)
+  1660→
+  1661→    # كشف الاهتمامات
+  1662→    detect_interests(user_id, text)
+  1663→
+  1664→    # لو المستخدم بيعبر عن تفضيل، احفظه كذكرى
+  1665→    if role == "user" and has_preference_intent(text):
+  1666→        try:
+  1667→            # استخراج تفضيل بسيط
+  1668→            save_memory(user_id, f"preference_{datetime.now().strftime('%Y%m%d%H%M')}", text[:200], "preferences")
+  1669→        except Exception as e:
+  1670→            logger.debug(f"Smart save preference error: {e}")
+  1671→
+  1672→
+  1673→def get_personalized_greeting(user_id: int, lang: str = "ar") -> str:
+  1674→    """تجهيز تحية مخصصة بناءً على الذاكرة"""
+  1675→    user = get_user(user_id)
+  1676→    name = user.get("name", "")
+  1677→    interests = get_interests(user_id)
+  1678→
+  1679→    if lang == "ar":
+  1680→        if name:
+  1681→            greeting = f"أهلاً {name}! 👋"
+  1682→        else:
+  1683→            greeting = "أهلاً! 👋"
+  1684→
+  1685→        if interests:
+  1686→            top_interest = interests[0] if interests else ""
+  1687→            if top_interest:
+  1688→                greeting += f"\n🎯 عارف إنك مهتم بـ {top_interest}، ممكن أقولك آخر الأخبار عنه!"
+  1689→    else:
+  1690→        if name:
+  1691→            greeting = f"Hey {name}! 👋"
+  1692→        else:
+  1693→            greeting = "Hey! 👋"
+  1694→
+  1695→        if interests:
+  1696→            top_interest = interests[0] if interests else ""
+  1697→            if top_interest:
+  1698→                greeting += f"\n🎯 I know you're into {top_interest}, want me to share the latest news about it?"
+  1699→
+  1700→    return greeting
+  1701→
+  1702→
+  1703→def get_recommended_topic(user_id: int, lang: str = "ar") -> str:
+  1704→    """توصية موضوع بناءً على الاهتمامات"""
+  1705→    interests = get_interests(user_id)
+  1706→    learned = get_learned_topics(user_id)
+  1707→
+  1708→    if not interests:
+  1709→        return ""
+  1710→
+  1711→    # إيجاد اهتمام لم يتعلمه بعد
+  1712→    for interest in interests:
+  1713→        if interest.lower() not in [l.lower() for l in learned]:
+  1714→            if lang == "ar":
+  1715→                return f"💡 ممكن تتعلم عن {interest}! جرب <code>/learn {interest}</code>"
+  1716→            else:
+  1717→                return f"💡 You could learn about {interest}! Try <code>/learn {interest}</code>"
+  1718→
+  1719→    return ""
+  1720→
+  1721→
+  1722→def is_new_user(user_id: int) -> bool:
+  1723→    """فحص هل المستخدم جديد (أول مرة يستخدم البوت)"""
+  1724→    ph = "%s" if _is_postgres() else "?"
+  1725→    row = _execute(
+  1726→        f"SELECT created_at FROM user_profiles WHERE user_id = {ph}",
+  1727→        (user_id,), fetchone=True
+  1728→    )
+  1729→    if row and row[0]:
+  1730→        return False  # مستخدم قديم - عنده created_at
+  1731→    return True  # مستخدم جديد
+  1732→
+  1733→
+  1734→# ═══════════════════════════════════════
+  1735→# نظام الحظر والتحذيرات - Ban & Warning System
+  1736→# ═══════════════════════════════════════
+  1737→
+  1738→def is_banned(user_id: int) -> bool:
+  1739→    """فحص هل المستخدم محظور"""
+  1740→    ph = "%s" if _is_postgres() else "?"
+  1741→    row = _execute(f"SELECT user_id FROM banned_users WHERE user_id = {ph}", (user_id,), fetchone=True)
+  1742→    return row is not None
+  1743→
+  1744→
+  1745→def ban_user(user_id: int, reason: str = "", banned_by: str = ""):
+  1746→    """حظر مستخدم"""
+  1747→    _ensure_user_in_db(user_id)
+  1748→    now = datetime.now().isoformat()
+  1749→    ph1, ph2, ph3, ph4 = ("%s", "%s", "%s", "%s") if _is_postgres() else ("?", "?", "?", "?")
+  1750→    _execute(
+  1751→        f"INSERT INTO banned_users (user_id, reason, banned_at, banned_by) VALUES ({ph1}, {ph2}, {ph3}, {ph4}) ON CONFLICT (user_id) DO UPDATE SET reason = {ph2}, banned_at = {ph3}, banned_by = {ph4}",
+  1752→        (user_id, reason, now, banned_by)
+  1753→    )
+  1754→
+  1755→
+  1756→def unban_user(user_id: int):
+  1757→    """إلغاء حظر مستخدم"""
+  1758→    ph = "%s" if _is_postgres() else "?"
+  1759→    _execute(f"DELETE FROM banned_users WHERE user_id = {ph}", (user_id,))
+  1760→
+  1761→
+  1762→def get_warning_count(user_id: int) -> int:
+  1763→    """الحصول على عدد التحذيرات"""
+  1764→    ph = "%s" if _is_postgres() else "?"
+  1765→    row = _execute(f"SELECT warning_count FROM banned_users WHERE user_id = {ph}", (user_id,), fetchone=True)
+  1766→    return row[0] if row else 0
+  1767→
+  1768→
+  1769→def add_warning(user_id: int, reason: str = "", warned_by: str = "") -> int:
+  1770→    """إضافة تحذير وترجيع العدد الجديد"""
+  1771→    _ensure_user_in_db(user_id)
+  1772→    now = datetime.now().isoformat()
+  1773→    ph1, ph2, ph3, ph4 = ("%s", "%s", "%s", "%s") if _is_postgres() else ("?", "?", "?", "?")
+  1774→    # Check if already has warnings entry
+  1775→    existing = _execute(f"SELECT warning_count FROM banned_users WHERE user_id = {ph1}", (user_id,), fetchone=True)
+  1776→    if existing:
+  1777→        new_count = existing[0] + 1
+  1778→        _execute(f"UPDATE banned_users SET warning_count = {ph1}, reason = {ph2}, banned_by = {ph3} WHERE user_id = {ph4}", (new_count, reason, warned_by, user_id))
+  1779→    else:
+  1780→        new_count = 1
+  1781→        _execute(f"INSERT INTO banned_users (user_id, reason, banned_at, banned_by, warning_count) VALUES ({ph1}, {ph2}, {ph3}, {ph4}, 1)", (user_id, reason, now, warned_by))
+  1782→    return new_count
+  1783→
+  1784→
+  1785→def get_last_news_delivery(user_id: int) -> Optional[str]:
+  1786→    """الحصول على آخر مرة وصلت فيها الأخبار للمستخدم"""
+  1787→    user = get_user(user_id)
+  1788→    return user.get("last_news_delivery", None)
+  1789→
+  1790→def set_last_news_delivery(user_id: int, delivery_time: str):
+  1791→    """تحديث آخر وقت وصول أخبار للمستخدم"""
+  1792→    update_user(user_id, {"last_news_delivery": delivery_time})
+  1793→
+  1794→def get_subscribers_for_time(hour: int, minute: int, platform: str = None) -> List[Dict]:
+  1795→    """الحصول على المشتركين اللي وقت أخبارهم matches الساعة دي
+  1796→    
+  1797→    🔴 FIX v3: 
+  1798→    - إضافة platform filter — عشان نبعت للتلجرام لوحده والواتساب لوحده
+  1799→    - إضافة wa_phone — ضروري عشان بث الواتساب يحتاج رقم التليفون مش user_id الداخلي
+  1800→    """
+  1801→    # Format: "HH:MM" e.g., "14:00" or "12:00"
+  1802→    time_str = f"{hour:02d}:{minute:02d}"
+  1803→    ph = "%s" if _is_postgres() else "?"
+  1804→    
+  1805→    if platform:
+  1806→        rows = _execute(
+  1807→            f"SELECT user_id, language, news_time, name, last_news_delivery, platform, wa_phone FROM user_profiles WHERE subscribed = {ph} AND news_time = {ph} AND platform = {ph}",
+  1808→            (1, time_str, platform),
+  1809→            fetch=True
+  1810→        )
+  1811→    else:
+  1812→        rows = _execute(
+  1813→            f"SELECT user_id, language, news_time, name, last_news_delivery, platform, wa_phone FROM user_profiles WHERE subscribed = {ph} AND news_time = {ph}",
+  1814→            (1, time_str),
+  1815→            fetch=True
+  1816→        )
+  1817→    if rows:
+  1818→        if _is_postgres():
+  1819→            return [{"user_id": r[0], "language": r[1], "news_time": r[2], "name": r[3], "last_news_delivery": r[4], "platform": r[5] if len(r) > 5 else "telegram", "wa_phone": r[6] if len(r) > 6 else ""} for r in rows]
+  1820→        return [{"user_id": dict(r)["user_id"], "language": dict(r).get("language", "ar"), "news_time": dict(r).get("news_time", "12:00"), "name": dict(r).get("name", ""), "last_news_delivery": dict(r).get("last_news_delivery", None), "platform": dict(r).get("platform", "telegram"), "wa_phone": dict(r).get("wa_phone", "")} for r in rows]
+  1821→    # fallback
+  1822→    all_users = _load_all_users()
+  1823→    subscribers = []
+  1824→    for uid, data in all_users.items():
+  1825→        if data.get("subscribed", False) and data.get("news_time", "12:00") == time_str:
+  1826→            if platform and data.get("platform") != platform:
+  1827→                continue
+  1828→            subscribers.append({
+  1829→                "user_id": int(uid), "language": data.get("language", "ar"),
+  1830→                "news_time": data.get("news_time", "12:00"), "name": data.get("name", ""),
+  1831→                "last_news_delivery": data.get("last_news_delivery", None),
+  1832→                "platform": data.get("platform", "telegram"),
+  1833→                "wa_phone": data.get("wa_phone", ""),
+  1834→            })
+  1835→    return subscribers
+  1836→
+  1837→
+  1838→# ═══════════════════════════════════════
+  1839→# تهيئة عند الاستيراد - Init on Import
+  1840→# ═══════════════════════════════════════
+  1841→
+  1842→try:
+  1843→    init_database()
+  1844→except Exception as e:
+  1845→    logger.error(f"Failed to initialize database: {e}")
+  1846→
+  1847→# 🔴 Migration: تحديث وقت الأخبار الافتراضي من "09:00" لـ "12:00" لكل المستخدمين
+  1848→# المستخدمين اللي news_time = "09:00" ده كان الوقت الافتراضي القديم — محدش اختاره يدوي
+  1849→try:
+  1850→    _OLD_DEFAULT_NEWS_TIME = "09:00"
+  1851→    _NEW_DEFAULT_NEWS_TIME = "12:00"
+  1852→    ph = "%s" if _is_postgres() else "?"
+  1853→    updated = _execute(
+  1854→        f"UPDATE user_profiles SET news_time = {ph} WHERE news_time = {ph}",
+  1855→        (_NEW_DEFAULT_NEWS_TIME, _OLD_DEFAULT_NEWS_TIME),
+  1856→    )
+  1857→    if updated and (isinstance(updated, int) and updated > 0 or hasattr(updated, 'rowcount') and updated.rowcount > 0):
+  1858→        count = updated if isinstance(updated, int) else updated.rowcount
+  1859→        logger.info(f"⏰ Migration: Updated {count} users' news_time from 09:00 to 12:00 (new default)")
+  1860→except Exception as _mg_err:
+  1861→    logger.debug(f"News time migration skipped: {_mg_err}")
+  1862→
