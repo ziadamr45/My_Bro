@@ -1689,14 +1689,61 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
 
     # ── Dynamic AI-powered sub-commands ──
     elif command.startswith("search_") or command in ("cmd_search_ai", "cmd_search_code"):
-        from whatsapp_webhook import _send_ai_response
         search_queries = {
-            "cmd_search_ai": "أحدث تطورات الذكاء الاصطناعي",
+            "cmd_search_ai": "أحدث أخبار الذكاء الاصطناعي اليوم",
             "cmd_search_code": "أحدث تقنيات البرمجة وتطوير البرمجيات",
         }
         query = search_queries.get(command, "أحدث التطورات التقنية")
-        await _send_ai_response(wa_id, f"ابحث لي عن: {query}",
-            wa_user_id, contact_name, message_id, context_type="search", increment_feature="searches")
+        
+        # 🔴 FIX: نبحث على الإنترنت مباشرة بـ Tavily بدل ما نروح لـ smart_chat
+        # smart_chat بيجاوب من training data قديم — لازم نبحث على الويب!
+        try:
+            from whatsapp.api import ThinkingFeedback
+            feedback = ThinkingFeedback(wa_id, message_id, context_type="search")
+            await feedback.start()
+            
+            from web_search import search_and_summarize_async
+            search_result = await search_and_summarize_async(query, language="ar", user_id=wa_user_id)
+            
+            if search_result:
+                from formatters import clean_ai_response
+                from whatsapp.state import _strip_html_for_whatsapp, _split_whatsapp_message
+                cleaned = clean_ai_response(search_result)
+                wa_msg = _strip_html_for_whatsapp(cleaned)
+                chunks = _split_whatsapp_message(wa_msg)
+                for chunk in chunks:
+                    await _send_whatsapp_message(wa_id, chunk)
+                    if len(chunks) > 1:
+                        await asyncio.sleep(0.05)
+            else:
+                await _send_whatsapp_message(wa_id, "⚠️ لم أجد نتائج. جرب تاني بكلمات بحث مختلفة.")
+            
+            await feedback.complete()
+            
+            # Increment usage
+            try:
+                from premium import increment_usage
+                increment_usage(wa_user_id, "searches")
+            except Exception:
+                pass
+            
+            # Contextual buttons
+            try:
+                await _send_interactive_buttons(wa_id, body_text="عايز حاجة تانية؟",
+                    buttons=[
+                        {"id": "cmd_search", "title": "🔍 بحث تاني"},
+                        {"id": "cmd_news", "title": "📰 أخبار"},
+                        {"id": "cmd_commands", "title": "📋 الأوامر"},
+                    ])
+            except Exception:
+                pass
+            
+        except Exception as e:
+            logger.error(f"❌ WA search error: {e}")
+            # Fallback: نروح لـ smart_chat لو البحث فشل
+            from whatsapp_webhook import _send_ai_response
+            await _send_ai_response(wa_id, f"ابحث لي عن: {query}",
+                wa_user_id, contact_name, message_id, context_type="search", increment_feature="searches")
 
     elif command.startswith("ask_") or command in ("cmd_ask_ai", "cmd_ask_code"):
         from whatsapp_webhook import _send_ai_response
