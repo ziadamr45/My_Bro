@@ -1479,7 +1479,7 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
         pdf_agent = PDFAgent()
         try:
             result = await asyncio.wait_for(
-                pdf_agent.key_points(pdf_ctx["text"][:30000], "ar", user_id=wa_user_id),
+                pdf_agent.extract_key_points(pdf_ctx["text"][:30000], "ar", user_id=wa_user_id),
                 timeout=120.0
             )
             from formatters import clean_ai_response
@@ -1656,8 +1656,72 @@ async def _handle_command(wa_id: str, command: str, wa_user_id: int, contact_nam
             except Exception:
                 pass
 
-        await _send_whatsapp_message(wa_id,
-            f"📚 {study_action}\n\nاكتب الموضوع اللي عايز {study_action} فيه\n\nمثال: {study_action} الفقه الإسلامي")
+        # 🔴 FIX: If user has a PDF context, study the PDF directly instead of asking for topic
+        pdf_ctx = _wa_user_pdf_context.get(wa_user_id, {})
+        if not pdf_ctx:
+            try:
+                from memory import get_memories
+                mems = get_memories(wa_user_id)
+                pdf_text = mems.get("pdf_context_text", "")
+                pdf_fn = mems.get("pdf_context_filename", "")
+                if pdf_text:
+                    pdf_ctx = {"text": pdf_text, "filename": pdf_fn}
+                    _wa_user_pdf_context[wa_user_id] = pdf_ctx
+            except Exception:
+                pass
+
+        if pdf_ctx:
+            # User has a PDF — study it directly
+            pdf_filename = pdf_ctx.get("filename", "الملف")
+            await _send_whatsapp_message(wa_id, f"📚 {study_action} من: {pdf_filename}...")
+            
+            from agents.pdf_agent import PDFAgent
+            pdf_agent = PDFAgent()
+            try:
+                study_result = None
+                if study_action == "علمني":
+                    study_result = await asyncio.wait_for(
+                        pdf_agent.explain_chapter(pdf_ctx["text"][:30000], language="ar", user_id=wa_user_id),
+                        timeout=120.0
+                    )
+                elif study_action == "اعملني كويز":
+                    study_result = await asyncio.wait_for(
+                        pdf_agent.create_quiz(pdf_ctx["text"][:30000], num_questions=5, language="ar", user_id=wa_user_id),
+                        timeout=120.0
+                    )
+                elif study_action == "اعملني امتحان شامل":
+                    study_result = await asyncio.wait_for(
+                        pdf_agent.create_quiz(pdf_ctx["text"][:30000], num_questions=10, language="ar", user_id=wa_user_id),
+                        timeout=120.0
+                    )
+                elif study_action == "اعملني ملاحظات مراجعة مختصرة":
+                    study_result = await asyncio.wait_for(
+                        pdf_agent.generate_study_notes(pdf_ctx["text"][:30000], language="ar", user_id=wa_user_id),
+                        timeout=120.0
+                    )
+                else:
+                    # Default: explain
+                    study_result = await asyncio.wait_for(
+                        pdf_agent.explain_chapter(pdf_ctx["text"][:30000], language="ar", user_id=wa_user_id),
+                        timeout=120.0
+                    )
+
+                if study_result:
+                    from formatters import clean_ai_response
+                    study_result = clean_ai_response(study_result)
+                    response_text = _strip_html_for_whatsapp(study_result)
+                    chunks = _split_whatsapp_message(response_text)
+                    for chunk in chunks:
+                        await _send_whatsapp_message(wa_id, chunk)
+                else:
+                    await _send_whatsapp_message(wa_id, "⚠️ مش قادر أدرس الملف. جرب تاني!")
+            except Exception as e:
+                logger.error(f"❌ PDF study error: {e}")
+                await _send_whatsapp_message(wa_id, "⚠️ حصل خطأ في الدراسة. جرب تاني!")
+        else:
+            # No PDF — ask for topic
+            await _send_whatsapp_message(wa_id,
+                f"📚 {study_action}\n\nاكتب الموضوع اللي عايز {study_action} فيه\n\nمثال: {study_action} الفقه الإسلامي")
 
     else:
         return False  # Not a command

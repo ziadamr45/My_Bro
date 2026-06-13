@@ -584,6 +584,8 @@ async def _handle_incoming_message(message: dict, value: dict):
 
             # ═══ PDF Follow-up Q&A ═══
             # If user has a PDF context and asks a question, answer based on the PDF
+            # 🔴 FIX: Only treat as PDF question if the message clearly relates to the file
+            # (starts with question word, or mentions "الملف"/"الوثيقة")
             if not command:  # Not a recognized command
                 pdf_ctx = _wa_user_pdf_context.get(wa_user_id, {})
                 if not pdf_ctx:
@@ -600,11 +602,18 @@ async def _handle_incoming_message(message: dict, value: dict):
                         pass
                 
                 if pdf_ctx and len(content.strip()) > 3:
-                    # Check if it looks like a question about the document
+                    # 🔴 FIX: Smarter detection — only treat as PDF question if:
+                    # 1. Message contains question indicators AND mentions the file
+                    # 2. OR message explicitly references "الملف"/"الوثيقة"/"الملف ده"
+                    # This prevents normal conversation from being treated as PDF questions
                     question_indicators = ["ايه", "إيه", "ازاي", "إزاي", "ليه", "ليه", "هل", "كام", "فين", "مين", "ان", "أن", "what", "how", "why", "when", "where", "who", "is", "are", "can", "?", "؟"]
-                    is_question = any(content.strip().lower().startswith(q) for q in question_indicators) or "؟" in content or "?" in content
+                    file_indicators = ["الملف", "الوثيقة", "المستند", "الpdf", "الـ pdf", "الملف ده", "في الملف", "من الملف", "the file", "the document", "this file"]
                     
-                    if is_question:
+                    is_question = any(content.strip().lower().startswith(q) for q in question_indicators) or "؟" in content or "?" in content
+                    mentions_file = any(ind in content.lower() for ind in file_indicators)
+                    
+                    # Only route to PDF Q&A if question + mentions file, OR explicitly about the file
+                    if mentions_file or (is_question and len(content.strip()) < 100):
                         from ai_engine import smart_chat
                         from formatters import clean_ai_response
                         

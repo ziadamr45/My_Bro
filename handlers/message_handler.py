@@ -83,8 +83,13 @@ async def _safe_send_single(update: Update, text: str, parse_mode: str = "HTML",
                 try:
                     clean_text = text.replace('<b>', '').replace('</b>', '')
                     clean_text = clean_text.replace('<i>', '').replace('</i>', '')
+                    clean_text = clean_text.replace('<u>', '').replace('</u>', '')
+                    clean_text = clean_text.replace('<s>', '').replace('</s>', '')
                     clean_text = clean_text.replace('<code>', '').replace('</code>', '')
+                    clean_text = clean_text.replace('<pre>', '').replace('</pre>', '')
                     clean_text = clean_text.replace('<a href=', '').replace('</a>', '')
+                    clean_text = clean_text.replace('<strong>', '').replace('</strong>', '')
+                    clean_text = clean_text.replace('<em>', '').replace('</em>', '')
                     await update.message.reply_text(clean_text[:4000])
                     return
                 except Exception:
@@ -497,17 +502,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                     
                     await _safe_send_message(update, result)
+                    
+                    # 🔴 FIX: Clear the PDF question workflow after answering
+                    # User can still ask more questions via the PDF buttons,
+                    # but normal conversation will work again
+                    clear_workflow(user_id)
+                    from handlers.callbacks import user_states
+                    user_states.pop(user_id, None)
                 except asyncio.TimeoutError:
                     logger.error(f"⏰ PDF question timed out for user {user_id}")
+                    clear_workflow(user_id)
+                    from handlers.callbacks import user_states
+                    user_states.pop(user_id, None)
                     if lang == "ar":
                         await update.message.reply_text("⏰ استغرق الرد وقت طويل. جرب تاني!")
                     else:
                         await update.message.reply_text("⏰ Response timed out. Please try again!")
                 except Exception as e:
                     logger.error(f"Error answering PDF question: {e}")
+                    clear_workflow(user_id)
+                    from handlers.callbacks import user_states
+                    user_states.pop(user_id, None)
                     await update.message.reply_text("❌ حصل خطأ. جرب تاني." if lang == "ar" else "❌ Error occurred. Please try again.")
+            else:
+                # No PDF context — clear workflow and fall through to normal chat
+                clear_workflow(user_id)
+                from handlers.callbacks import user_states
+                user_states.pop(user_id, None)
             
-            # لا نمسح الـ workflow — المستخدم يقدر يسأل أسئلة كتير عن نفس PDF
             return
         
         # ═══ Image Edit Workflow ═══
@@ -636,7 +658,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error answering PDF question: {e}")
                 await update.message.reply_text("❌ حصل خطأ. جرب تاني." if lang == "ar" else "❌ Error occurred. Please try again.")
-            # لا نمسح — المستخدم يقدر يسأل كتير
+            # 🔴 FIX: Clear state after answering — user goes back to normal chat
+            user_states.pop(user_id, None)
             return
         else:
             user_states.pop(user_id, None)

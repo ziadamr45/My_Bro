@@ -51,8 +51,14 @@ def _strip_non_telegram_html(text: str) -> str:
     text = re.sub(r'<t[dh][^>]*>', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'</t[dh]>', ' ', text, flags=re.IGNORECASE)
     
+    # 🔴 نحول <strong> لـ <b> و <em> لـ <i> (تليجرام مش بيدعم strong/em)
+    text = re.sub(r'<strong[^>]*>', '<b>', text, flags=re.IGNORECASE)
+    text = re.sub(r'</strong>', '</b>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<em[^>]*>', '<i>', text, flags=re.IGNORECASE)
+    text = re.sub(r'</em>', '</i>', text, flags=re.IGNORECASE)
+
     # 🔴 نشيل كل opening/closing tags اللي مش مدعومة من تليجرام
-    # القائمة دي كل حاجة مش: b, i, u, s, code, pre, a, spoiler, blockquote, tg-spoiler, em, strong
+    # القائمة دي كل حاجة مش: b, i, u, s, code, pre, a, spoiler, blockquote, tg-spoiler
     unsupported_tags = (
         'div', 'span', 'section', 'article', 'main', 'header', 'footer', 'nav',
         'ol', 'ul', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tfoot', 'caption',
@@ -80,16 +86,17 @@ def _strip_non_telegram_html(text: str) -> str:
     
     # 🔴 نشيل style, class, id, وكل event attributes من أي tag متبقي
     # مثال: <b style="..."> ← <b>
-    text = re.sub(r'<(b|i|u|s|code|pre|a|spoiler|blockquote|tg-spoiler|em|strong)\s+[^>]*?>', r'<\1>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<(b|i|u|s|code|pre|a|spoiler|blockquote|tg-spoiler)\s+[^>]*?>', r'<\1>', text, flags=re.IGNORECASE)
     
     # 🔴 نشيل أي tag متبقي مش في القائمة المدعومة (catch-all)
-    # القائمة المسموحة: b, i, u, s, code, pre, a, spoiler, blockquote, tg-spoiler, em, strong
-    allowed_pattern = r'/?((?:b|i|u|s|code|pre|a|spoiler|blockquote|tg-spoiler|em|strong)(?:\s[^>]*)?)'
+    # القائمة المسموحة: b, i, u, s, code, pre, a, spoiler, blockquote, tg-spoiler
+    # (strong/em تم تحويلها لـ b/i فوق، مش محتاجين نبقيهم)
+    allowed_pattern = r'/?((?:b|i|u|s|code|pre|a|spoiler|blockquote|tg-spoiler)(?:\s[^>]*)?)'
     # نشيل أي tag مش في القائمة
     def _clean_unknown_tag(match):
         tag_content = match.group(1)
         tag_name = tag_content.strip().split()[0].rstrip('/')
-        allowed_names = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'spoiler', 'blockquote', 'tg-spoiler', 'em', 'strong'}
+        allowed_names = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'spoiler', 'blockquote', 'tg-spoiler'}
         if tag_name.lower() in allowed_names:
             return match.group(0)  # نسيبه زي ما هو
         return ''  # نشيله
