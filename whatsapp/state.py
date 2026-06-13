@@ -93,7 +93,8 @@ ADMIN_WA_ID = os.environ.get("ADMIN_WA_ID", "201203551789")  # Admin WhatsApp ID
 
 # Developer WhatsApp contact for premium/subscription messages
 DEVELOPER_WHATSAPP = os.environ.get("DEVELOPER_WHATSAPP", "01203551789")
-DEVELOPER_WHATSAPP_URL = f"https://wa.me/{DEVELOPER_WHATSAPP.lstrip('0')}"
+# 🔴 FIX: رابط التواصل مع المطور — wa.me/qr link مباشرة
+DEVELOPER_WHATSAPP_URL = os.environ.get("DEVELOPER_WHATSAPP_URL", "https://wa.me/qr/4UFP2G4E7KNAC1")
 
 
 def _wa_phone_to_user_id(phone: str) -> int:

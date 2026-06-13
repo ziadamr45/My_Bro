@@ -39,7 +39,8 @@ DEVELOPER_USERNAME = "ziadamr"  # @ziadamr
 DEVELOPER_TELEGRAM = "@ziadamr"
 DEVELOPER_TELEGRAM_URL = "https://t.me/ziadamr"
 DEVELOPER_WHATSAPP = os.environ.get("DEVELOPER_WHATSAPP", "01203551789")
-DEVELOPER_WHATSAPP_URL = f"https://wa.me/{DEVELOPER_WHATSAPP.lstrip('0')}"
+# 🔴 FIX: رابط التواصل مع المطور على واتساب — wa.me/qr link مباشرة
+DEVELOPER_WHATSAPP_URL = os.environ.get("DEVELOPER_WHATSAPP_URL", "https://wa.me/qr/4UFP2G4E7KNAC1")
 
 # ═══════════════════════════════════════
 # إعدادات الجدولة - Scheduler Settings

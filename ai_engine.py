@@ -825,7 +825,7 @@ Made with love in Egypt 🇪🇬"""
 ═══ البريميوم ═══
 🆓 مجاني: 20 رسالة AI/يوم • 3 PDF/يوم • 5 صور/يوم • 5 بحث/يوم • نماذج أساسية
 ⭐ Premium: غير محدود + نماذج أقوى + بحث عميق + وضع دراسة + ذاكرة طويلة + Vision Pro
-📩 للاشتراك تواصل مع المطور على واتساب: https://wa.me/201203551789
+📩 للاشتراك تواصل مع المطور على واتساب: https://wa.me/qr/4UFP2G4E7KNAC1
 🔴 البوت متاح بخطتين فقط: مجانية (free) وبريميوم (premium). لا تذكر أي خطط أخرى مثل VIP أو Premium Plus للمستخدم.
 
 ═══ التنسيق ═══
@@ -871,7 +871,7 @@ Ziad Amr (@ziadamr) — Egyptian web developer. Founder of Qudra Tech. Specializ
 ═══ Premium ═══
 🆓 Free: 20 AI msgs/day • 3 PDF/day • 5 images/day • 5 searches/day • Basic models
 ⭐ Premium: Unlimited + stronger models + deep search + study mode + long-term memory + Vision Pro
-📩 To subscribe contact the developer on WhatsApp: https://wa.me/201203551789
+📩 To subscribe contact the developer on WhatsApp: https://wa.me/qr/4UFP2G4E7KNAC1
 🔴 The bot has only two plans: Free and Premium. NEVER mention other plans like VIP or Premium Plus to users.
 
 ═══ Formatting ═══
@@ -890,7 +890,7 @@ Your creator: Ziad Amr (spelled Z-I-A-D, NOT Zid!) — Egyptian Developer. Made 
 Respond in English naturally and clearly."""
 
     # استبدال WhatsApp URL بالقيمة من config
-    _base_system_cache[cache_key] = _base_system_cache[cache_key].replace("https://wa.me/201203551789", DEVELOPER_WHATSAPP_URL)
+    _base_system_cache[cache_key] = _base_system_cache[cache_key].replace("https://wa.me/qr/4UFP2G4E7KNAC1", DEVELOPER_WHATSAPP_URL)
 
     # استبدال {{DATE_CONTEXT}} بالتاريخ الحالي
     system = _base_system_cache[cache_key].replace("{{DATE_CONTEXT}}", date_context)
