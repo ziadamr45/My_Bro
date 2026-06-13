@@ -15,3 +15,8 @@ venv/
 *.log
 data/
 worklog.md
+
+# Node.js
+node_modules/
+.next/
+tool-results/
