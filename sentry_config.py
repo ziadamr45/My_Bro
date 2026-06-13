@@ -150,9 +150,33 @@ def init_sentry() -> bool:
             release = "ai-news-bot@unknown"
 
         # Custom before_send hook — forwards critical errors to Telegram
+        # + filters out noisy non-critical errors (SQLite fallback, etc.)
+        _NOISY_ERROR_PATTERNS = [
+            "SQLite: no database connection available",
+            "no database connection available",
+        ]
+
         def _before_send(event, hint):
-            """Forward captured exceptions to Telegram for instant alerts."""
+            """Forward captured exceptions to Telegram for instant alerts.
+            Also drops known noisy/non-critical errors to avoid alert fatigue."""
             try:
+                # ── Filter out noisy non-critical errors ──
+                if hint.get("exc_info"):
+                    exc_type, exc_value, exc_tb = hint["exc_info"]
+                    if exc_value and isinstance(exc_value, Exception):
+                        err_msg = str(exc_value)
+                        # Skip known noisy patterns — these are fallback-only, not critical
+                        for pattern in _NOISY_ERROR_PATTERNS:
+                            if pattern in err_msg:
+                                return None  # Drop the event entirely
+                elif hint.get("log_record"):
+                    # Also filter log-based events
+                    log_msg = getattr(hint["log_record"], "getMessage", lambda: "")()
+                    for pattern in _NOISY_ERROR_PATTERNS:
+                        if pattern in log_msg:
+                            return None
+
+                # ── Forward to Telegram ──
                 if hint.get("exc_info"):
                     exc_type, exc_value, exc_tb = hint["exc_info"]
                     if exc_value and isinstance(exc_value, Exception):

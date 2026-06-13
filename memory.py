@@ -37,6 +37,7 @@ _pg_pool = None  # psycopg2.pool.SimpleConnectionPool
 _pg_pool_lock = threading.Lock()  # حماية الـ pool من concurrent access
 _local = threading.local()  # بيفضل لـ SQLite فقط
 _db_type = None  # "postgresql" or "sqlite"
+_db_unavailable_logged = False  # Rate-limit "no DB connection" logs — log once, not per request
 
 
 def _clean_database_url(url: str) -> str:
@@ -581,10 +582,16 @@ def _execute(query, params=(), fetch=False, fetchone=False, dict_cursor=False):
             if conn is not None:
                 _return_pg_conn(conn)
     else:
-        # SQLite
+        # SQLite (fallback only)
         db = _get_db()
         if db is None:
-            logger.error("SQLite: no database connection available")
+            # This is a known fallback scenario — not a critical error.
+            # PostgreSQL is the primary DB; SQLite is just a fallback.
+            # Rate-limit logging to avoid spamming Sentry with 100+ alerts.
+            global _db_unavailable_logged
+            if not _db_unavailable_logged:
+                logger.warning("SQLite: no database connection available (PostgreSQL is primary, this is fallback-only)")
+                _db_unavailable_logged = True
             return None
         if fetchone:
             return db.execute(query, params).fetchone()
